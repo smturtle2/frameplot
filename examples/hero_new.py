@@ -1,27 +1,8 @@
 ﻿from frameplot import Node, Edge, Group, DetailPanel, Theme, Pipeline
 
 def main():
-    # 1. 커스텀 테마 설정 (세련된 다크 모드)
-    # Slate/Zinc 계열의 다크 테마
-    dark_theme = Theme(
-        background_color="#09090b",
-        node_fill="#18181b",
-        node_stroke="#3f3f46",
-        node_text_color="#fafafa",
-        edge_color="#71717a",
-        group_stroke="#52525b",
-        group_fill="#27272a",
-        group_label_color="#a1a1aa",
-        detail_panel_fill="#111113",
-        detail_panel_stroke="#3f3f46",
-        detail_panel_title_color="#d4d4d8",
-        detail_panel_guide_color="#3f3f46",
-        # 폰트 및 간격 조정
-        title_font_family="Inter, system-ui, sans-serif",
-        rank_gap=120.0,
-        node_gap=40.0,
-        corner_radius=12.0
-    )
+    # 1. 테마 설정 (프리셋 사용으로 대폭 간소화)
+    dark_theme = Theme.dark()
 
     # 2. 메인 파이프라인 노드
     nodes = [

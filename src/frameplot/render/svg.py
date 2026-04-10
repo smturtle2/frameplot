@@ -32,6 +32,18 @@ def render_svg(layout: LayoutResult, theme: Theme) -> str:
     )
 
     defs = ET.SubElement(root, ET.QName(SVG_NS, "defs"))
+    
+    # Drop Shadow Filter
+    filter_elem = ET.SubElement(defs, ET.QName(SVG_NS, "filter"), attrib={"id": "drop-shadow", "x": "-20%", "y": "-20%", "width": "140%", "height": "140%"})
+    ET.SubElement(filter_elem, ET.QName(SVG_NS, "feGaussianBlur"), attrib={"in": "SourceAlpha", "stdDeviation": "2"})
+    ET.SubElement(filter_elem, ET.QName(SVG_NS, "feOffset"), attrib={"dx": "0", "dy": "2", "result": "offsetblur"})
+    ET.SubElement(filter_elem, ET.QName(SVG_NS, "feComponentTransfer")).append(
+        ET.Element(ET.QName(SVG_NS, "feFuncA"), attrib={"type": "linear", "slope": "0.08"})
+    )
+    merge = ET.SubElement(filter_elem, ET.QName(SVG_NS, "feMerge"))
+    ET.SubElement(merge, ET.QName(SVG_NS, "feMergeNode"))
+    ET.SubElement(merge, ET.QName(SVG_NS, "feMergeNode"), attrib={"in": "SourceGraphic"})
+
     marker_ids = _build_markers(defs, _all_edges(layout), theme)
 
     ET.SubElement(
@@ -99,9 +111,22 @@ def _render_groups(parent: ET.Element, graph: GraphLayout, theme: Theme) -> None
                 "ry": _fmt(theme.group_corner_radius),
                 "stroke": overlay.stroke,
                 "stroke-width": _fmt(theme.group_stroke_width),
-                "stroke-dasharray": "8 6",
                 "fill": overlay.fill,
                 "fill-opacity": _fmt(theme.group_fill_opacity),
+            },
+        )
+        # Subtle accent line at the top
+        ET.SubElement(
+            parent,
+            ET.QName(SVG_NS, "line"),
+            attrib={
+                "x1": _fmt(overlay.bounds.x + 10),
+                "y1": _fmt(overlay.bounds.y),
+                "x2": _fmt(overlay.bounds.x + 60),
+                "y2": _fmt(overlay.bounds.y),
+                "stroke": overlay.stroke,
+                "stroke-width": _fmt(theme.group_stroke_width * 2.5),
+                "stroke-linecap": "round",
             },
         )
         ET.SubElement(
@@ -152,6 +177,7 @@ def _render_detail_panel_container(
             "stroke-width": _fmt(theme.detail_panel_stroke_width),
             "fill": detail_panel.fill,
             "fill-opacity": _fmt(theme.detail_panel_fill_opacity),
+            "filter": "url(#drop-shadow)",
         },
     )
     ET.SubElement(
@@ -221,6 +247,7 @@ def _render_node(
             "fill": node.fill or theme.node_fill,
             "stroke": node.stroke or theme.node_stroke,
             "stroke-width": _fmt(theme.stroke_width),
+            "filter": "url(#drop-shadow)",
         },
     )
 

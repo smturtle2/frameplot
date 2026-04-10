@@ -9,17 +9,17 @@ Turn Python-defined pipeline graphs into presentation-ready SVG and PNG diagrams
 
 [한국어 README](https://github.com/smturtle2/frameplot/blob/main/README.ko.md)
 
-![frameplot hero image](https://raw.githubusercontent.com/smturtle2/frameplot/main/docs/assets/frameplot-hero.png)
+![frameplot hero image](https://raw.githubusercontent.com/smturtle2/frameplot/main/docs/assets/frameplot-hero-new.png)
 
 `frameplot` is a compact Python library for rendering left-to-right pipeline diagrams with clean defaults. Define nodes, edges, groups, and optional detail panels in plain Python, then export polished SVG for documentation or PNG for slides and papers.
 
 ## Why frameplot?
 
-- Clean left-to-right layout for architecture diagrams, data pipelines, and model overviews
-- SVG-first output with optional PNG export through CairoSVG
-- Detail panels for expanding a summary node into a lower inset mini-graph
-- Themeable typography, spacing, colors, and routing defaults
-- Deterministic rendering from simple dataclass-based inputs
+- **Clean and Professional**: Left-to-right architecture diagrams with modern defaults.
+- **Diagram as Code**: Define your pipeline in Python, get deterministic SVG/PNG outputs.
+- **Detail Panels**: Unique feature to expand a summary node into a lower inset mini-graph for deep dives.
+- **Deep Customization**: Fine-tune typography, spacing, colors, and corner radii via `Theme`.
+- **Presentation Ready**: High-quality SVG for web/docs and PNG for slides or papers.
 
 ## Install
 
@@ -57,6 +57,8 @@ pipeline.save_svg("pipeline.svg")
 pipeline.save_png("pipeline.png")
 ```
 
+![Quickstart result](https://raw.githubusercontent.com/smturtle2/frameplot/main/docs/assets/quickstart.png)
+
 ## Public API
 
 Top-level imports are the supported public API:
@@ -75,14 +77,13 @@ Top-level imports are the supported public API:
 - `to_png_bytes() -> bytes`
 - `save_png(path) -> None`
 
-## Advanced Example
+## Advanced Example: Multi-cloud Data Pipeline
 
-The hero image above is generated from [`examples/sar_backbone_example.py`](https://github.com/smturtle2/frameplot/blob/main/examples/sar_backbone_example.py), which demonstrates:
+The hero image at the top is a practical example of a **Multi-cloud Data Pipeline** architecture, generated from [`examples/hero_new.py`](https://github.com/smturtle2/frameplot/blob/main/examples/hero_new.py). It showcases:
 
-- custom `Theme` values
-- split decoder branches
-- grouped overlays
-- a `DetailPanel` attached to a summary node
+- **Complex Routing**: Seamlessly connecting AWS (S3/Lambda) to GCP (Pub/Sub/Dataflow) services.
+- **Contextual Details**: Using a `DetailPanel` to explain the internal Spark Job Pipeline of the "Dataflow" node.
+- **Dark Mode Styling**: Applying a sophisticated **Slate/Zinc** dark theme for a modern look.
 
 ## Design Notes
 

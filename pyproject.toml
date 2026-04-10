@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=80", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frameplot"
+version = "0.1.0"
+description = "Turn Python-defined pipeline graphs into presentation-ready SVG and PNG diagrams."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Small Turtle 2" }]
+keywords = ["diagram", "graph", "pipeline", "png", "svg", "visualization"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Scientific/Engineering :: Visualization",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = ["CairoSVG>=2.7"]
+
+[project.urls]
+Homepage = "https://github.com/smturtle2/frameplot"
+Repository = "https://github.com/smturtle2/frameplot"
+Issues = "https://github.com/smturtle2/frameplot/issues"
+Releases = "https://github.com/smturtle2/frameplot/releases"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -57,6 +57,12 @@ class Theme:
     route_track_gap: float = 20.0
     back_edge_gap: float = 30.0
     self_loop_size: float = 32.0
+    
+    # Shadow and effects
+    shadow_blur: float = 4.0
+    shadow_opacity: float = 0.05
+    shadow_offset_y: float = 2.0
+    show_group_accent_line: bool = True
 
     @classmethod
     def modern(cls) -> Theme:
@@ -71,11 +77,45 @@ class Theme:
             group_fill="#F4F4F5",
             group_label_color="#71717A",
             title_font_family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-            corner_radius=8.0,
+            corner_radius=10.0,
             stroke_width=1.2,
             group_fill_opacity=0.5,
             rank_gap=80.0,
             node_gap=32.0,
+            shadow_blur=8.0,
+            shadow_opacity=0.04,
+            shadow_offset_y=3.0,
+            show_group_accent_line=False,
+        )
+
+    @classmethod
+    def presentation(cls) -> Theme:
+        """High contrast, clean lines, maximum readability for presentations."""
+        return cls(
+            background_color="#FFFFFF",
+            node_fill="#FFFFFF",
+            node_stroke="#CBD5E1",
+            node_text_color="#0F172A",
+            edge_color="#94A3B8",
+            group_stroke="#E2E8F0",
+            group_fill="#F8FAFC",
+            group_label_color="#64748B",
+            title_font_family="Inter, -apple-system, 'SF Pro Display', system-ui, sans-serif",
+            title_font_size=16.0,
+            subtitle_font_size=13.0,
+            title_font_weight=700,
+            subtitle_font_weight=500,
+            corner_radius=12.0,
+            group_corner_radius=20.0,
+            stroke_width=1.5,
+            group_stroke_width=1.0,
+            group_fill_opacity=1.0,
+            rank_gap=120.0,
+            node_gap=48.0,
+            shadow_blur=12.0,
+            shadow_opacity=0.08,
+            shadow_offset_y=6.0,
+            show_group_accent_line=False,
         )
 
     @classmethod

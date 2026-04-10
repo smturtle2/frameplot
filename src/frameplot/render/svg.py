@@ -35,10 +35,10 @@ def render_svg(layout: LayoutResult, theme: Theme) -> str:
     
     # Drop Shadow Filter
     filter_elem = ET.SubElement(defs, ET.QName(SVG_NS, "filter"), attrib={"id": "drop-shadow", "x": "-20%", "y": "-20%", "width": "140%", "height": "140%"})
-    ET.SubElement(filter_elem, ET.QName(SVG_NS, "feGaussianBlur"), attrib={"in": "SourceAlpha", "stdDeviation": "2"})
-    ET.SubElement(filter_elem, ET.QName(SVG_NS, "feOffset"), attrib={"dx": "0", "dy": "2", "result": "offsetblur"})
+    ET.SubElement(filter_elem, ET.QName(SVG_NS, "feGaussianBlur"), attrib={"in": "SourceAlpha", "stdDeviation": _fmt(theme.shadow_blur)})
+    ET.SubElement(filter_elem, ET.QName(SVG_NS, "feOffset"), attrib={"dx": "0", "dy": _fmt(theme.shadow_offset_y), "result": "offsetblur"})
     ET.SubElement(filter_elem, ET.QName(SVG_NS, "feComponentTransfer")).append(
-        ET.Element(ET.QName(SVG_NS, "feFuncA"), attrib={"type": "linear", "slope": "0.08"})
+        ET.Element(ET.QName(SVG_NS, "feFuncA"), attrib={"type": "linear", "slope": _fmt(theme.shadow_opacity)})
     )
     merge = ET.SubElement(filter_elem, ET.QName(SVG_NS, "feMerge"))
     ET.SubElement(merge, ET.QName(SVG_NS, "feMergeNode"))
@@ -116,19 +116,20 @@ def _render_groups(parent: ET.Element, graph: GraphLayout, theme: Theme) -> None
             },
         )
         # Subtle accent line at the top
-        ET.SubElement(
-            parent,
-            ET.QName(SVG_NS, "line"),
-            attrib={
-                "x1": _fmt(overlay.bounds.x + 10),
-                "y1": _fmt(overlay.bounds.y),
-                "x2": _fmt(overlay.bounds.x + 60),
-                "y2": _fmt(overlay.bounds.y),
-                "stroke": overlay.stroke,
-                "stroke-width": _fmt(theme.group_stroke_width * 2.5),
-                "stroke-linecap": "round",
-            },
-        )
+        if theme.show_group_accent_line:
+            ET.SubElement(
+                parent,
+                ET.QName(SVG_NS, "line"),
+                attrib={
+                    "x1": _fmt(overlay.bounds.x + 10),
+                    "y1": _fmt(overlay.bounds.y),
+                    "x2": _fmt(overlay.bounds.x + 60),
+                    "y2": _fmt(overlay.bounds.y),
+                    "stroke": overlay.stroke,
+                    "stroke-width": _fmt(theme.group_stroke_width * 2.5),
+                    "stroke-linecap": "round",
+                },
+            )
         ET.SubElement(
             parent,
             ET.QName(SVG_NS, "text"),

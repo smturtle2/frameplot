@@ -496,9 +496,9 @@ def test_sar_backbone_example_builds() -> None:
     layout = build_layout(pipeline)
     svg = pipeline.to_svg()
 
-    assert "Inside SAR backbone block" in svg
-    assert 'id="detail-panel-backbone-detail"' in svg
+    assert "Inside SAR Backbone Block" in svg
+    assert 'id="detail-panel-backbone_detail"' in svg
     assert "Neighborhood" in svg
-    assert "cross-attn" in svg
-    assert "Cloud-free output" in svg
+    assert "Cross-Attn" in svg
+    assert "Cloud-free Output" in svg
     assert layout.main.nodes["backbone"].order > layout.main.nodes["cloudy_stem"].order

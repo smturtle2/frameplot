@@ -9,7 +9,7 @@ Turn Python-defined pipeline graphs into presentation-ready SVG and PNG diagrams
 
 [한국어 README](https://github.com/smturtle2/frameplot/blob/main/README.ko.md)
 
-![frameplot hero image](https://raw.githubusercontent.com/smturtle2/frameplot/main/docs/assets/frameplot-hero-new.png)
+![frameplot hero image](docs/assets/frameplot-hero-new.png)
 
 `frameplot` is a compact Python library for rendering left-to-right pipeline diagrams with clean defaults. Define nodes, edges, groups, and optional detail panels in plain Python, then export polished SVG for documentation or PNG for slides and papers.
 
@@ -57,7 +57,7 @@ pipeline.save_svg("pipeline.svg")
 pipeline.save_png("pipeline.png")
 ```
 
-![Quickstart result](https://raw.githubusercontent.com/smturtle2/frameplot/main/docs/assets/quickstart.png)
+![Quickstart result](docs/assets/quickstart.png)
 
 ## Public API
 

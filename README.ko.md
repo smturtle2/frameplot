@@ -9,7 +9,7 @@
 
 [English README](https://github.com/smturtle2/frameplot/blob/main/README.md)
 
-![frameplot hero image](https://raw.githubusercontent.com/smturtle2/frameplot/main/docs/assets/frameplot-hero-new.png)
+![frameplot hero image](docs/assets/frameplot-hero-new.png)
 
 `frameplot`은 왼쪽에서 오른쪽으로 흐르는 파이프라인 다이어그램을 깔끔한 기본값으로 렌더링하는 경량 파이썬 라이브러리입니다. 노드, 엣지, 그룹, 그리고 선택적인 detail panel을 파이썬 데이터 구조로 정의한 뒤, 문서용 SVG나 발표 자료용 PNG로 바로 내보낼 수 있습니다.
 
@@ -57,7 +57,7 @@ pipeline.save_svg("pipeline.svg")
 pipeline.save_png("pipeline.png")
 ```
 
-![Quickstart result](https://raw.githubusercontent.com/smturtle2/frameplot/main/docs/assets/quickstart.png)
+![Quickstart result](docs/assets/quickstart.png)
 
 ## 공개 API
 

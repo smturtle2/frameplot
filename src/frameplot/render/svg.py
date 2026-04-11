@@ -237,6 +237,7 @@ def _render_detail_panel_container(
             "fill-opacity": _fmt(theme.detail_panel_fill_opacity),
         },
     )
+
     ET.SubElement(
         parent,
         ET.QName(SVG_NS, "text"),
@@ -280,8 +281,8 @@ def _render_nodes(
     *,
     id_prefix: str = "",
 ) -> None:
-    for node_id in sorted(nodes, key=lambda item: (nodes[item].rank, nodes[item].order, item)):
-        _render_node(parent, nodes[node_id], theme, metrics, element_id=f"{id_prefix}{node_id}")
+    for index, node_id in enumerate(sorted(nodes, key=lambda item: (nodes[item].rank, nodes[item].order, item))):
+        _render_node(parent, nodes[node_id], theme, metrics, element_id=f"{id_prefix}{node_id}", palette_index=index)
 
 
 def _render_node(
@@ -291,9 +292,17 @@ def _render_node(
     metrics: ResolvedThemeMetrics,
     *,
     element_id: str,
+    palette_index: int = 0,
 ) -> None:
     node = layout_node.node
     node_group = ET.SubElement(parent, ET.QName(SVG_NS, "g"), attrib={"id": element_id})
+
+    default_fill = (
+        theme.color_palette[palette_index % len(theme.color_palette)]
+        if theme.color_palette
+        else theme.node_fill
+    )
+    
     _render_shadow_layers(
         node_group,
         x=layout_node.x,
@@ -315,7 +324,7 @@ def _render_node(
             "height": _fmt(layout_node.height),
             "rx": _fmt(theme.corner_radius),
             "ry": _fmt(theme.corner_radius),
-            "fill": node.fill or theme.node_fill,
+            "fill": node.fill or default_fill,
             "stroke": node.stroke or theme.node_stroke,
             "stroke-width": _fmt(theme.stroke_width),
         },
@@ -413,19 +422,20 @@ def _render_shadow_layers(
     ry: float,
     metrics: ResolvedThemeMetrics,
 ) -> None:
-    for layer in metrics.paint_shadow_layers:
+    for layer in reversed(metrics.paint_shadow_layers):
         if layer.opacity <= 0:
             continue
+        # Use spread to expand the rectangle outwards
         ET.SubElement(
             parent,
             ET.QName(SVG_NS, "rect"),
             attrib={
-                "x": _fmt(x),
-                "y": _fmt(y + layer.offset_y),
-                "width": _fmt(width),
-                "height": _fmt(height),
-                "rx": _fmt(rx),
-                "ry": _fmt(ry),
+                "x": _fmt(x - layer.spread),
+                "y": _fmt(y + layer.offset_y - layer.spread),
+                "width": _fmt(width + layer.spread * 2.0),
+                "height": _fmt(height + layer.spread * 2.0),
+                "rx": _fmt(rx + layer.spread if rx > 0 else 0),
+                "ry": _fmt(ry + layer.spread if ry > 0 else 0),
                 "fill": "#000000",
                 "opacity": _fmt(layer.opacity),
             },

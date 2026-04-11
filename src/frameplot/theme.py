@@ -15,6 +15,7 @@ class FilterShadowLayer:
 @dataclass(slots=True, frozen=True)
 class PaintShadowLayer:
     offset_y: float
+    spread: float
     opacity: float
 
 
@@ -115,6 +116,7 @@ class Theme:
     shadow_opacity: float = 0.05
     shadow_offset_y: float = 2.0
     show_group_accent_line: bool = True
+    color_palette: tuple[str, ...] | None = None
 
     @classmethod
     def modern(cls) -> Theme:
@@ -209,6 +211,121 @@ class Theme:
         )
 
 
+    @classmethod
+    def pastel(cls) -> 'Theme':
+        """A soft, calming pastel theme with rounded shapes and crisp white borders."""
+        return cls(
+            background_color="transparent",
+            node_fill="#FCE7F3",
+            node_stroke="#FFFFFF",
+            node_text_color="#57534E",
+            edge_color="#A8A29E",
+            group_stroke="#E5E7EB",
+            group_fill="#F3F4F6",
+            group_label_color="#9CA3AF",
+            detail_panel_fill="#FAFAF9",
+            detail_panel_stroke="#FFFFFF",
+            detail_panel_title_color="#A8A29E",
+            detail_panel_guide_color="#E5E7EB",
+            group_fill_opacity=0.4,
+            stroke_width=4.0,
+            corner_radius=16.0,
+            group_corner_radius=24.0,
+            shadow_blur=6.0,
+            shadow_opacity=0.15,
+            shadow_offset_y=10.0,
+            color_palette=(
+                "#FEE2E2", "#FFEDD5", "#FEF3C7", "#ECFCCB",
+                "#D1FAE5", "#CCFBF1", "#E0F2FE", "#E0E7FF",
+                "#F3E8FF", "#FAE8FF", "#FCE7F3"
+            ),
+        )
+
+    @classmethod
+    def glass(cls) -> 'Theme':
+        """Clean modern glassmorphism simulating frosted surfaces."""
+        return cls(
+            background_color="transparent",
+            node_fill="rgba(255, 255, 255, 0.65)",
+            node_stroke="rgba(255, 255, 255, 0.95)",
+            node_text_color="#1E293B",
+            edge_color="#94A3B8",
+            group_stroke="rgba(255, 255, 255, 0.5)",
+            group_fill="rgba(241, 245, 249, 0.4)",
+            group_label_color="#64748B",
+            detail_panel_fill="rgba(255, 255, 255, 0.85)",
+            detail_panel_stroke="rgba(255, 255, 255, 0.95)",
+            detail_panel_title_color="#1E293B",
+            detail_panel_guide_color="rgba(148, 163, 184, 0.4)",
+            group_fill_opacity=1.0,
+            stroke_width=2.0,
+            corner_radius=16.0,
+            group_corner_radius=24.0,
+            shadow_blur=24.0,
+            shadow_opacity=0.1,
+            shadow_offset_y=8.0,
+            color_palette=(),
+        )
+
+
+    @classmethod
+    def retro(cls) -> 'Theme':
+        """A nostalgic retro theme with warm, vintage colors and strong borders."""
+        return cls(
+            background_color="transparent",
+            node_fill="#F4EBD9",
+            node_stroke="#111111",
+            node_text_color="#111111",
+            edge_color="#111111",
+            group_stroke="#111111",
+            group_fill="#E8E1CD",
+            group_label_color="#111111",
+            detail_panel_fill="#FAF8F5",
+            detail_panel_stroke="#111111",
+            detail_panel_title_color="#111111",
+            detail_panel_guide_color="#D1C8B4",
+            group_fill_opacity=0.6,
+            stroke_width=2.5,
+            corner_radius=0.0,
+            group_corner_radius=0.0,
+            shadow_blur=0.0,
+            shadow_opacity=1.0,
+            shadow_offset_y=6.0,
+            color_palette=(
+                "#FF6B6B", "#FCA5A5", "#FDE047", "#86EFAC",
+                "#93C5FD", "#A78BFA", "#F472B6", "#FDBA74"
+            )
+        )
+
+    @classmethod
+    def ocean(cls) -> 'Theme':
+        """A light, airy oceanic theme with soft cyan and seafoam tones."""
+        return cls(
+            background_color="transparent",
+            node_fill="#E0F2FE",
+            node_stroke="#0284C7",
+            node_text_color="#0C4A6E",
+            edge_color="#38BDF8",
+            group_stroke="#7DD3FC",
+            group_fill="#F0F9FF",
+            group_label_color="#0369A1",
+            detail_panel_fill="#FFFFFF",
+            detail_panel_stroke="#7DD3FC",
+            detail_panel_title_color="#0C4A6E",
+            detail_panel_guide_color="#BAE6FD",
+            group_fill_opacity=0.5,
+            stroke_width=2.0,
+            corner_radius=12.0,
+            group_corner_radius=20.0,
+            shadow_blur=8.0,
+            shadow_opacity=0.1,
+            shadow_offset_y=4.0,
+            color_palette=(
+                "#E0F2FE", "#BAE6FD", "#7DD3FC", "#38BDF8",
+                "#0EA5E9", "#0284C7", "#0369A1", "#075985"
+            )
+        )
+
 def resolve_theme_metrics(theme: Theme) -> ResolvedThemeMetrics:
     """Resolve derived metrics so layout and rendering share the same ratios."""
 
@@ -269,18 +386,12 @@ def resolve_theme_metrics(theme: Theme) -> ResolvedThemeMetrics:
             ),
         ),
         paint_shadow_layers=(
-            PaintShadowLayer(
-                offset_y=round(theme.shadow_offset_y * 0.5, 2),
-                opacity=round(theme.shadow_opacity * 0.8, 4),
-            ),
-            PaintShadowLayer(
-                offset_y=round(theme.shadow_offset_y, 2),
-                opacity=round(theme.shadow_opacity * 0.4, 4),
-            ),
-            PaintShadowLayer(
-                offset_y=round(theme.shadow_offset_y * 1.5, 2),
-                opacity=round(theme.shadow_opacity * 0.27, 4),
-            ),
+            PaintShadowLayer(offset_y=round(theme.shadow_offset_y * 1.0, 2), spread=round(theme.shadow_blur * 1.0, 2), opacity=round(theme.shadow_opacity * 0.05, 4)),
+            PaintShadowLayer(offset_y=round(theme.shadow_offset_y * 0.8, 2), spread=round(theme.shadow_blur * 0.8, 2), opacity=round(theme.shadow_opacity * 0.1, 4)),
+            PaintShadowLayer(offset_y=round(theme.shadow_offset_y * 0.6, 2), spread=round(theme.shadow_blur * 0.6, 2), opacity=round(theme.shadow_opacity * 0.2, 4)),
+            PaintShadowLayer(offset_y=round(theme.shadow_offset_y * 0.4, 2), spread=round(theme.shadow_blur * 0.4, 2), opacity=round(theme.shadow_opacity * 0.3, 4)),
+            PaintShadowLayer(offset_y=round(theme.shadow_offset_y * 0.2, 2), spread=round(theme.shadow_blur * 0.2, 2), opacity=round(theme.shadow_opacity * 0.35, 4)),
+            PaintShadowLayer(offset_y=round(theme.shadow_offset_y * 0.0, 2), spread=round(theme.shadow_blur * 0.0, 2), opacity=round(theme.shadow_opacity * 0.4, 4)),
         ),
         marker_viewbox_size=round(marker_viewbox_size, 2),
         marker_ref_x=round(marker_tip_x, 2),

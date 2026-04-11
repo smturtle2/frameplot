@@ -101,8 +101,9 @@ def place_nodes(
 def _weak_components(validated: "ValidatedPipeline | ValidatedDetailPanel") -> list[tuple[str, ...]]:
     adjacency: dict[str, set[str]] = {node.id: set() for node in validated.nodes}
     for edge in validated.edges:
-        adjacency[edge.source].add(edge.target)
-        adjacency[edge.target].add(edge.source)
+        target_node_id = validated.edge_targets[edge.id].node_id
+        adjacency[edge.source].add(target_node_id)
+        adjacency[target_node_id].add(edge.source)
 
     components: list[tuple[str, ...]] = []
     seen: set[str] = set()
@@ -148,10 +149,11 @@ def _row_gap_after(
         row_padding[row] = max((node_padding.get(n, 0.0) for n in nodes_in_row), default=0.0)
 
     for edge in validated.edges:
-        if edge.source not in component_set or edge.target not in component_set:
+        target_node_id = validated.edge_targets[edge.id].node_id
+        if edge.source not in component_set or target_node_id not in component_set:
             continue
         source_row = rows[edge.source]
-        target_row = rows[edge.target]
+        target_row = rows[target_node_id]
         if source_row == target_row:
             continue
         for row in range(min(source_row, target_row), max(source_row, target_row)):

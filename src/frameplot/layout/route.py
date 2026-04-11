@@ -50,6 +50,38 @@ class Occupancy:
 
 
 @dataclass(slots=True, frozen=True)
+class JoinSegmentChoice:
+    target_edge_id: str
+    target_node_id: str
+    segment_index: int
+    start: Point
+    end: Point
+    orientation: str
+    preferred_position: float
+    distance: float
+
+
+@dataclass(slots=True, frozen=True)
+class EdgeJoinPlan:
+    target_edge_id: str
+    target_node_id: str
+    segment_index: int
+    start: Point
+    end: Point
+    orientation: str
+    join_point: Point
+
+
+@dataclass(slots=True, frozen=True)
+class PathPointLocation:
+    segment_index: int
+    start: Point
+    end: Point
+    orientation: str
+    point: Point
+
+
+@dataclass(slots=True, frozen=True)
 class GroupRoutingFrame:
     bounds: Bounds
     member_bounds: Bounds
@@ -66,6 +98,27 @@ class RoutingGroups:
     component_group_ids: dict[int, tuple[str, ...]]
 
 
+def _resolved_target(validated: "ValidatedPipeline | ValidatedDetailPanel", edge: "Edge"):
+    return validated.edge_targets[edge.id]
+
+
+def _target_node_id(validated: "ValidatedPipeline | ValidatedDetailPanel", edge: "Edge") -> str:
+    return validated.edge_targets[edge.id].node_id
+
+
+def _target_edge_id(validated: "ValidatedPipeline | ValidatedDetailPanel", edge: "Edge") -> str | None:
+    return validated.edge_targets[edge.id].edge_id
+
+
+def _is_edge_target(validated: "ValidatedPipeline | ValidatedDetailPanel", edge: "Edge") -> bool:
+    return validated.edge_targets[edge.id].kind == "edge"
+
+
+def _is_self_loop(validated: "ValidatedPipeline | ValidatedDetailPanel", edge: "Edge") -> bool:
+    target = validated.edge_targets[edge.id]
+    return target.kind == "node" and edge.source == target.node_id
+
+
 def route_edges(
     validated: "ValidatedPipeline | ValidatedDetailPanel",
     nodes: dict[str, LayoutNode],
@@ -74,11 +127,14 @@ def route_edges(
     component_geometry = _build_component_geometry(nodes, validated.theme, routing_groups)
     forward_outgoing: dict[str, list["Edge"]] = defaultdict(list)
     forward_incoming: dict[str, list["Edge"]] = defaultdict(list)
+    node_target_edges = tuple(edge for edge in validated.edges if not _is_edge_target(validated, edge))
+    edge_target_edges = tuple(edge for edge in validated.edges if _is_edge_target(validated, edge))
+    target_node_ids = {edge.id: _target_node_id(validated, edge) for edge in validated.edges}
 
-    for edge in validated.edges:
+    for edge in node_target_edges:
         source_node = nodes[edge.source]
-        target_node = nodes[edge.target]
-        if edge.source != edge.target and source_node.rank < target_node.rank:
+        target_node = nodes[_target_node_id(validated, edge)]
+        if not _is_self_loop(validated, edge) and source_node.rank < target_node.rank:
             forward_outgoing[edge.source].append(edge)
             forward_incoming[target_node.node.id].append(edge)
 
@@ -88,17 +144,17 @@ def route_edges(
     occupancies: dict[int, Occupancy] = defaultdict(Occupancy)
     routed_by_id: dict[str, RoutedEdge] = {}
 
-    ordered_edges = sorted(
-        validated.edges,
-        key=lambda edge: _edge_route_order(edge, nodes, validated.edge_index[edge.id]),
+    ordered_node_edges = sorted(
+        node_target_edges,
+        key=lambda edge: _edge_route_order(edge, nodes, target_node_ids, validated.edge_index[edge.id]),
     )
 
-    for edge in ordered_edges:
+    for edge in ordered_node_edges:
         source_node = nodes[edge.source]
-        target_node = nodes[edge.target]
+        target_node = nodes[_target_node_id(validated, edge)]
         geometry = component_geometry[source_node.component_id]
 
-        if edge.source == edge.target:
+        if _is_self_loop(validated, edge):
             points = _select_self_loop_route(
                 source_node=source_node,
                 geometry=geometry,
@@ -118,7 +174,7 @@ def route_edges(
                 nodes=nodes,
                 occupancy=occupancies[source_node.component_id],
                 outgoing_count=len(forward_outgoing[edge.source]),
-                incoming_count=len(forward_incoming[edge.target]),
+                incoming_count=len(forward_incoming[target_node.node.id]),
                 pair_offset=pair_offsets.get(edge.id, 0.0),
                 routing_groups=routing_groups,
                 theme=validated.theme,
@@ -143,7 +199,61 @@ def route_edges(
             points=points,
             bounds=_bounds_for_points(points, validated.theme.stroke_width, validated.theme.arrow_size),
             stroke=edge.color or validated.theme.edge_color,
+            target_kind="node",
+            target_node_id=target_node.node.id,
         )
+
+    if edge_target_edges:
+        join_plans = _assign_edge_join_plans(
+            validated=validated,
+            edges=edge_target_edges,
+            nodes=nodes,
+            routed_by_id=routed_by_id,
+            pair_offsets=pair_offsets,
+        )
+        ordered_join_edges = sorted(
+            edge_target_edges,
+            key=lambda edge: _edge_route_order(edge, nodes, target_node_ids, validated.edge_index[edge.id]),
+        )
+
+        for edge in ordered_join_edges:
+            source_node = nodes[edge.source]
+            target_node = nodes[_target_node_id(validated, edge)]
+            geometry = component_geometry[source_node.component_id]
+            plan = join_plans[edge.id]
+            candidate = _select_edge_join_route(
+                edge=edge,
+                source_node=source_node,
+                target_node=target_node,
+                join_plan=plan,
+                geometry=geometry,
+                nodes=nodes,
+                occupancy=occupancies[source_node.component_id],
+                pair_offset=pair_offsets.get(edge.id, 0.0),
+                routing_groups=routing_groups,
+                theme=validated.theme,
+            )
+            _reserve_candidate(occupancies[source_node.component_id], candidate, edge.id)
+            badge_radius = _join_badge_radius(validated.theme) if edge.merge_symbol is not None else 0.0
+            routed_by_id[edge.id] = RoutedEdge(
+                edge=edge,
+                points=candidate.points,
+                bounds=_bounds_for_points(
+                    candidate.points,
+                    validated.theme.stroke_width,
+                    validated.theme.arrow_size,
+                    badge_radius=badge_radius,
+                ),
+                stroke=edge.color or validated.theme.edge_color,
+                target_kind="edge",
+                target_node_id=plan.target_node_id,
+                target_edge_id=plan.target_edge_id,
+                join_point=plan.join_point,
+                badge_center=plan.join_point if edge.merge_symbol is not None else None,
+                join_segment_index=plan.segment_index,
+                show_arrowhead=edge.merge_symbol is None,
+                join_badge_radius=badge_radius,
+            )
 
     return tuple(routed_by_id[edge.id] for edge in validated.edges)
 
@@ -243,10 +353,10 @@ def _group_internal_back_edge_top_reserve(
 ) -> float:
     group_node_ids = set(group.node_ids)
     has_internal_back_edge = any(
-        edge.source != edge.target
+        not _is_self_loop(validated, edge)
         and edge.source in group_node_ids
-        and edge.target in group_node_ids
-        and nodes[edge.source].rank >= nodes[edge.target].rank
+        and _target_node_id(validated, edge) in group_node_ids
+        and nodes[edge.source].rank >= nodes[_target_node_id(validated, edge)].rank
         for edge in validated.edges
     )
     if not has_internal_back_edge:
@@ -267,16 +377,17 @@ def _group_internal_back_edge_side_reserves(
     right_reserve = 0.0
 
     for edge in validated.edges:
+        target_node_id = _target_node_id(validated, edge)
         if (
-            edge.source == edge.target
+            _is_self_loop(validated, edge)
             or edge.source not in group_node_ids
-            or edge.target not in group_node_ids
-            or nodes[edge.source].rank < nodes[edge.target].rank
+            or target_node_id not in group_node_ids
+            or nodes[edge.source].rank < nodes[target_node_id].rank
         ):
             continue
 
         source_node = nodes[edge.source]
-        target_node = nodes[edge.target]
+        target_node = nodes[target_node_id]
         desired_right_corridor = source_node.width * 0.35
         current_right_corridor = theme.group_padding + (member_bounds.right - source_node.right)
         desired_left_corridor = target_node.width * 0.35
@@ -424,9 +535,10 @@ def _assign_pair_offsets(
 
     for edges in groups.values():
         ordered = sorted(edges, key=lambda edge: edge.id)
+        first_target_node_id = _target_node_id(validated, ordered[0])
         max_offset = min(
             validated.theme.route_track_gap * 0.4,
-            min(nodes[ordered[0].source].height, nodes[ordered[0].target].height) / 4,
+            min(nodes[ordered[0].source].height, nodes[first_target_node_id].height) / 4,
         )
         centered = _centered_offsets(len(ordered), max_offset if max_offset > 0 else 0.0)
         for edge, offset in zip(ordered, centered, strict=True):
@@ -442,8 +554,10 @@ def _assign_back_slots(
     by_component: dict[int, list["Edge"]] = defaultdict(list)
     for edge in validated.edges:
         source_node = nodes[edge.source]
-        target_node = nodes[edge.target]
-        if edge.source != edge.target and source_node.rank >= target_node.rank:
+        if _is_edge_target(validated, edge):
+            continue
+        target_node = nodes[_target_node_id(validated, edge)]
+        if not _is_self_loop(validated, edge) and source_node.rank >= target_node.rank:
             by_component[source_node.component_id].append(edge)
 
     slots: dict[str, int] = {}
@@ -452,9 +566,9 @@ def _assign_back_slots(
             edges,
             key=lambda edge: (
                 nodes[edge.source].rank,
-                nodes[edge.target].rank,
+                nodes[_target_node_id(validated, edge)].rank,
                 nodes[edge.source].order,
-                nodes[edge.target].order,
+                nodes[_target_node_id(validated, edge)].order,
                 edge.id,
             ),
         )
@@ -466,7 +580,7 @@ def _assign_back_slots(
 def _assign_self_loop_slots(validated: "ValidatedPipeline | ValidatedDetailPanel") -> dict[str, int]:
     by_node: dict[str, list["Edge"]] = defaultdict(list)
     for edge in validated.edges:
-        if edge.source == edge.target:
+        if _is_self_loop(validated, edge):
             by_node[edge.source].append(edge)
 
     slots: dict[str, int] = {}
@@ -476,10 +590,15 @@ def _assign_self_loop_slots(validated: "ValidatedPipeline | ValidatedDetailPanel
     return slots
 
 
-def _edge_route_order(edge: "Edge", nodes: dict[str, LayoutNode], edge_index: int) -> tuple[int, int, int, int, int]:
+def _edge_route_order(
+    edge: "Edge",
+    nodes: dict[str, LayoutNode],
+    target_node_ids: dict[str, str],
+    edge_index: int,
+) -> tuple[int, int, int, int, int]:
     source_node = nodes[edge.source]
-    target_node = nodes[edge.target]
-    if edge.source == edge.target:
+    target_node = nodes[target_node_ids[edge.id]]
+    if edge.source == target_node.node.id:
         kind = 2
     elif source_node.rank < target_node.rank:
         kind = 0
@@ -585,6 +704,380 @@ def _route_forward(
         routing_groups=routing_groups,
         theme=theme,
     ).points
+
+
+def _assign_edge_join_plans(
+    *,
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    edges: tuple["Edge", ...],
+    nodes: dict[str, LayoutNode],
+    routed_by_id: dict[str, RoutedEdge],
+    pair_offsets: dict[str, float],
+) -> dict[str, EdgeJoinPlan]:
+    by_segment: dict[tuple[str, int], list[tuple["Edge", JoinSegmentChoice]]] = defaultdict(list)
+    merge_edges_by_target: dict[str, list["Edge"]] = defaultdict(list)
+
+    for edge in edges:
+        target_edge_id = _target_edge_id(validated, edge)
+        assert target_edge_id is not None
+        if edge.merge_symbol is not None:
+            merge_edges_by_target[target_edge_id].append(edge)
+            continue
+        choice = _choose_join_segment(
+            validated=validated,
+            edge=edge,
+            source_node=nodes[edge.source],
+            target_node=nodes[_target_node_id(validated, edge)],
+            target_route=routed_by_id[target_edge_id],
+            pair_offset=pair_offsets.get(edge.id, 0.0),
+        )
+        by_segment[(choice.target_edge_id, choice.segment_index)].append((edge, choice))
+
+    plans: dict[str, EdgeJoinPlan] = {}
+    for segment_edges in by_segment.values():
+        choice = segment_edges[0][1]
+        orientation = choice.orientation
+        margin = _join_endpoint_margin(validated.theme)
+        spacing = _join_spacing(validated.theme)
+        if orientation == "h":
+            low, high = sorted((choice.start.x, choice.end.x))
+        else:
+            low, high = sorted((choice.start.y, choice.end.y))
+        low += margin
+        high -= margin
+        if low > high:
+            midpoint = round((low + high) / 2, 2)
+            low = midpoint
+            high = midpoint
+
+        ordered = sorted(
+            segment_edges,
+            key=lambda item: (
+                nodes[item[0].source].order,
+                nodes[item[0].source].rank,
+                validated.node_index[item[0].source],
+                item[0].id,
+            ),
+        )
+        preferred_positions = [item[1].preferred_position for item in ordered]
+        coordinates = _distributed_join_positions(low, high, preferred_positions, spacing)
+
+        for coordinate, (edge, edge_choice) in zip(coordinates, ordered, strict=True):
+            join_point = (
+                Point(round(coordinate, 2), edge_choice.start.y)
+                if orientation == "h"
+                else Point(edge_choice.start.x, round(coordinate, 2))
+            )
+            plans[edge.id] = EdgeJoinPlan(
+                target_edge_id=edge_choice.target_edge_id,
+                target_node_id=edge_choice.target_node_id,
+                segment_index=edge_choice.segment_index,
+                start=edge_choice.start,
+                end=edge_choice.end,
+                orientation=orientation,
+                join_point=join_point,
+            )
+
+    badge_spacing = _merge_badge_spacing(validated.theme)
+    margin = _join_endpoint_margin(validated.theme)
+    for target_edge_id, target_edges in merge_edges_by_target.items():
+        target_route = routed_by_id[target_edge_id]
+        total_length = _path_length(target_route.points)
+        if total_length <= EPSILON:
+            continue
+
+        center_distance = total_length / 2.0
+        ordered = sorted(
+            target_edges,
+            key=lambda edge: (
+                nodes[edge.source].order,
+                nodes[edge.source].rank,
+                validated.node_index[edge.source],
+                edge.id,
+            ),
+        )
+        offsets = _centered_offsets(len(ordered), badge_spacing)
+        min_distance = margin
+        max_distance = total_length - margin
+
+        for edge, offset in zip(ordered, offsets, strict=True):
+            distance = center_distance + offset
+            if max_distance > min_distance:
+                distance = min(max(distance, min_distance), max_distance)
+            else:
+                distance = center_distance
+
+            location = _path_location_at_distance(target_route.points, distance)
+            plans[edge.id] = EdgeJoinPlan(
+                target_edge_id=target_edge_id,
+                target_node_id=_target_node_id(validated, edge),
+                segment_index=location.segment_index,
+                start=location.start,
+                end=location.end,
+                orientation=location.orientation,
+                join_point=location.point,
+            )
+
+    return plans
+
+
+def _choose_join_segment(
+    *,
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    edge: "Edge",
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    target_route: RoutedEdge,
+    pair_offset: float,
+) -> JoinSegmentChoice:
+    direction = _edge_direction_kind(source_node, target_node)
+    source_reference = _right_port(source_node, pair_offset)
+    candidates: list[JoinSegmentChoice] = []
+    fallback_candidates: list[JoinSegmentChoice] = []
+
+    for segment_index, (start, end) in enumerate(zip(target_route.points, target_route.points[1:])):
+        orientation = _segment_direction(start, end)
+        if orientation is None or not _segment_is_join_eligible(start, end, validated.theme):
+            continue
+
+        preferred_point = _closest_join_point(source_reference, start, end, validated.theme)
+        choice = JoinSegmentChoice(
+            target_edge_id=target_route.edge.id,
+            target_node_id=target_node.node.id,
+            segment_index=segment_index,
+            start=start,
+            end=end,
+            orientation=orientation,
+            preferred_position=preferred_point.x if orientation == "h" else preferred_point.y,
+            distance=abs(source_reference.x - preferred_point.x) + abs(source_reference.y - preferred_point.y),
+        )
+        fallback_candidates.append(choice)
+        if _segment_is_direction_compatible(source_node, target_node, start, end, direction, validated.theme):
+            candidates.append(choice)
+
+    if candidates:
+        return min(candidates, key=lambda item: (item.distance, item.segment_index, item.target_edge_id))
+    if fallback_candidates:
+        return min(fallback_candidates, key=lambda item: (item.distance, item.segment_index, item.target_edge_id))
+    raise AssertionError(f"No eligible join segment found for edge {edge.id}.")
+
+
+def _select_edge_join_route(
+    *,
+    edge: "Edge",
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    join_plan: EdgeJoinPlan,
+    geometry: ComponentGeometry,
+    nodes: dict[str, LayoutNode],
+    occupancy: Occupancy,
+    pair_offset: float,
+    routing_groups: RoutingGroups | None,
+    theme: "Theme",
+) -> CandidatePath:
+    candidates = _build_edge_join_candidates(
+        source_node=source_node,
+        target_node=target_node,
+        join_plan=join_plan,
+        geometry=geometry,
+        pair_offset=pair_offset,
+        theme=theme,
+    )
+    direction = _edge_direction_kind(source_node, target_node)
+    best: CandidatePath | None = None
+    best_score: float | None = None
+    fallback: CandidatePath | None = None
+    fallback_score: float | None = None
+
+    for kind, candidate in candidates:
+        score = _edge_join_score(
+            kind=kind,
+            candidate=candidate,
+            source_node=source_node,
+            target_node=target_node,
+            nodes=nodes,
+            theme=theme,
+            direction=direction,
+        )
+
+        if not _path_respects_group_clearance(
+            candidate.points,
+            source_node.node.id,
+            target_node.node.id,
+            routing_groups,
+        ):
+            continue
+
+        if fallback_score is None or score < fallback_score:
+            fallback = candidate
+            fallback_score = score
+
+        if _candidate_conflicts(candidate, occupancy):
+            continue
+
+        if best_score is None or score < best_score:
+            best = candidate
+            best_score = score
+
+    if best is not None:
+        return best
+    if fallback is not None:
+        return fallback
+    raise AssertionError(f"No viable join route found for edge {edge.id}.")
+
+
+def _build_edge_join_candidates(
+    *,
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    join_plan: EdgeJoinPlan,
+    geometry: ComponentGeometry,
+    pair_offset: float,
+    theme: "Theme",
+) -> list[tuple[str, CandidatePath]]:
+    join_point = join_plan.join_point
+    source_right = _right_port(source_node, pair_offset)
+    outer_row_lanes = _outer_row_lane_positions(geometry, theme)
+    outer_column_lanes = _outer_column_lane_positions(geometry, theme)
+    row_lanes = _unique_lanes(
+        _source_row_lane_positions(source_node, target_node, geometry, theme)
+        + _target_row_lane_positions(source_node, target_node, geometry, theme)
+        + outer_row_lanes
+    )
+    column_lanes = _unique_lanes(
+        _join_column_lane_positions(source_node, target_node, geometry, theme) + outer_column_lanes
+    )
+    candidates: dict[tuple[Point, ...], tuple[str, CandidatePath]] = {}
+
+    def add_candidate(kind: str, start: Point, segments: list[tuple[Point, str]]) -> None:
+        candidate = _build_candidate(start, segments)
+        candidates.setdefault(candidate.points, (kind, candidate))
+
+    if join_plan.orientation == "h":
+        add_candidate(
+            "direct_join",
+            source_right,
+            [
+                (Point(join_point.x, source_right.y), "reserve"),
+                (join_point, "stub"),
+            ],
+        )
+        for lane_y in row_lanes:
+            source_vertical = _vertical_port(source_node, pair_offset, lane_y)
+            kind = "outer_row_join" if lane_y in outer_row_lanes else "row_join"
+            add_candidate(
+                kind,
+                source_vertical,
+                [
+                    (Point(source_vertical.x, lane_y), "stub"),
+                    (Point(join_point.x, lane_y), "reserve"),
+                    (join_point, "stub"),
+                ],
+            )
+            add_candidate(
+                kind,
+                source_right,
+                [
+                    (Point(source_right.x, lane_y), "reserve"),
+                    (Point(join_point.x, lane_y), "reserve"),
+                    (join_point, "stub"),
+                ],
+            )
+        for lane_x in column_lanes:
+            for lane_y in row_lanes:
+                outer_kind = "outer_join" if lane_x in outer_column_lanes or lane_y in outer_row_lanes else "lane_join"
+                add_candidate(
+                    outer_kind,
+                    source_right,
+                    [
+                        (Point(lane_x, source_right.y), "reserve"),
+                        (Point(lane_x, lane_y), "reserve"),
+                        (Point(join_point.x, lane_y), "reserve"),
+                        (join_point, "stub"),
+                    ],
+                )
+    else:
+        add_candidate(
+            "direct_join",
+            source_right,
+            [
+                (Point(source_right.x, join_point.y), "reserve"),
+                (join_point, "stub"),
+            ],
+        )
+        for lane_x in column_lanes:
+            kind = "outer_column_join" if lane_x in outer_column_lanes else "column_join"
+            add_candidate(
+                kind,
+                source_right,
+                [
+                    (Point(lane_x, source_right.y), "reserve"),
+                    (Point(lane_x, join_point.y), "reserve"),
+                    (join_point, "stub"),
+                ],
+            )
+        for lane_y in row_lanes:
+            source_vertical = _vertical_port(source_node, pair_offset, lane_y)
+            for lane_x in column_lanes:
+                outer_kind = "outer_join" if lane_x in outer_column_lanes or lane_y in outer_row_lanes else "lane_join"
+                add_candidate(
+                    outer_kind,
+                    source_vertical,
+                    [
+                        (Point(source_vertical.x, lane_y), "stub"),
+                        (Point(lane_x, lane_y), "reserve"),
+                        (Point(lane_x, join_point.y), "reserve"),
+                        (join_point, "stub"),
+                    ],
+                )
+
+    return list(candidates.values())
+
+
+def _join_column_lane_positions(
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    geometry: ComponentGeometry,
+    theme: "Theme",
+) -> tuple[float, ...]:
+    lanes: list[float] = []
+    if source_node.rank in geometry.gap_after_rank:
+        lanes.extend(_ordered_gap_positions(geometry.gap_after_rank[source_node.rank], theme, "start"))
+    if target_node.rank in geometry.gap_before_rank:
+        lanes.extend(_ordered_gap_positions(geometry.gap_before_rank[target_node.rank], theme, "end"))
+    return tuple(lanes)
+
+
+def _unique_lanes(lanes: tuple[float, ...]) -> tuple[float, ...]:
+    return tuple(dict.fromkeys(round(lane, 2) for lane in lanes))
+
+
+def _edge_join_score(
+    *,
+    kind: str,
+    candidate: CandidatePath,
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    nodes: dict[str, LayoutNode],
+    theme: "Theme",
+    direction: str,
+) -> float:
+    points = candidate.points
+    length = _path_length(points)
+    bends = _bend_count(points)
+    backwards = _backwards_distance(points)
+    collisions = _count_node_collisions(points, nodes, {source_node.node.id, target_node.node.id}, theme)
+
+    score = collisions * 100000 + backwards * 1000 + bends * 120 + length
+    if "outer" in kind:
+        score += 220 if direction == "forward" else 90
+    if kind == "direct_join":
+        score -= 25
+    if kind == "lane_join":
+        score += 30
+    if direction == "back":
+        score -= min(backwards, theme.route_track_gap)
+    return score
 
 
 def _build_forward_candidates(
@@ -1462,6 +1955,146 @@ def _route_self_loop(
     )
 
 
+def _edge_direction_kind(source_node: LayoutNode, target_node: LayoutNode) -> str:
+    if source_node.node.id == target_node.node.id:
+        return "self"
+    if source_node.rank < target_node.rank:
+        return "forward"
+    return "back"
+
+
+def _segment_is_join_eligible(start: Point, end: Point, theme: "Theme") -> bool:
+    if start.x == end.x:
+        return abs(end.y - start.y) > max(theme.stroke_width * 2.0, 2.0)
+    if start.y == end.y:
+        return abs(end.x - start.x) > max(theme.stroke_width * 2.0, 2.0)
+    return False
+
+
+def _closest_join_point(source_reference: Point, start: Point, end: Point, theme: "Theme") -> Point:
+    margin = _join_endpoint_margin(theme)
+    if start.x == end.x:
+        top, bottom = sorted((start.y, end.y))
+        if bottom - top <= margin * 2 + EPSILON:
+            return Point(start.x, round((top + bottom) / 2, 2))
+        y = min(max(source_reference.y, top + margin), bottom - margin)
+        return Point(start.x, round(y, 2))
+
+    left, right = sorted((start.x, end.x))
+    if right - left <= margin * 2 + EPSILON:
+        return Point(round((left + right) / 2, 2), start.y)
+    x = min(max(source_reference.x, left + margin), right - margin)
+    return Point(round(x, 2), start.y)
+
+
+def _segment_is_direction_compatible(
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    start: Point,
+    end: Point,
+    direction: str,
+    theme: "Theme",
+) -> bool:
+    min_x, max_x = sorted((start.x, end.x))
+    if direction == "forward":
+        return max_x >= source_node.right - EPSILON
+    if direction == "self":
+        return max_x >= source_node.x - theme.route_track_gap
+    return min_x <= source_node.right + theme.route_track_gap * 2
+
+
+def _distributed_join_positions(
+    low: float,
+    high: float,
+    preferred_positions: list[float],
+    spacing: float,
+) -> list[float]:
+    if not preferred_positions:
+        return []
+    if len(preferred_positions) == 1:
+        return [round(min(max(preferred_positions[0], low), high), 2)]
+
+    usable = max(0.0, high - low)
+    effective_spacing = min(spacing, usable / max(1, len(preferred_positions) - 1))
+    total_span = effective_spacing * (len(preferred_positions) - 1)
+    center_low = low + total_span / 2
+    center_high = high - total_span / 2
+    preferred_center = sum(preferred_positions) / len(preferred_positions)
+
+    if center_low > center_high:
+        center = (low + high) / 2
+    else:
+        center = min(max(preferred_center, center_low), center_high)
+
+    start = center - total_span / 2
+    return [round(start + effective_spacing * index, 2) for index in range(len(preferred_positions))]
+
+
+def _join_endpoint_margin(theme: "Theme") -> float:
+    return max(theme.arrow_size * 2.0, theme.stroke_width * 4.0)
+
+
+def _join_spacing(theme: "Theme") -> float:
+    return max(theme.arrow_size * 1.5, theme.stroke_width * 6.0)
+
+
+def _join_badge_radius(theme: "Theme") -> float:
+    return round(max(theme.arrow_size * 0.9, theme.stroke_width * 3.0), 2)
+
+
+def _merge_badge_spacing(theme: "Theme") -> float:
+    return max(theme.arrow_size * 1.8, theme.stroke_width * 6.0)
+
+
+def _path_location_at_distance(points: tuple[Point, ...], distance: float) -> PathPointLocation:
+    if len(points) < 2:
+        raise AssertionError("Path must include at least one segment.")
+
+    total_length = _path_length(points)
+    clamped_distance = min(max(distance, 0.0), total_length)
+    travelled = 0.0
+    last_location: PathPointLocation | None = None
+
+    for segment_index, (start, end) in enumerate(zip(points, points[1:])):
+        orientation = _segment_direction(start, end)
+        if orientation is None:
+            continue
+
+        segment_length = abs(end.x - start.x) + abs(end.y - start.y)
+        if segment_length <= EPSILON:
+            continue
+
+        next_travelled = travelled + segment_length
+        if clamped_distance <= next_travelled + EPSILON:
+            remaining = min(max(clamped_distance - travelled, 0.0), segment_length)
+            if orientation == "v":
+                direction = 1 if end.y >= start.y else -1
+                point = Point(start.x, round(start.y + direction * remaining, 2))
+            else:
+                direction = 1 if end.x >= start.x else -1
+                point = Point(round(start.x + direction * remaining, 2), start.y)
+            return PathPointLocation(
+                segment_index=segment_index,
+                start=start,
+                end=end,
+                orientation=orientation,
+                point=point,
+            )
+
+        travelled = next_travelled
+        last_location = PathPointLocation(
+            segment_index=segment_index,
+            start=start,
+            end=end,
+            orientation=orientation,
+            point=end,
+        )
+
+    if last_location is not None:
+        return last_location
+    raise AssertionError("No routable segment found for path distance lookup.")
+
+
 def _centered_offsets(count: int, gap: float) -> list[float]:
     if count <= 1 or gap == 0:
         return [0.0] * count
@@ -1541,8 +2174,14 @@ def _segment_hits_bounds(start: Point, end: Point, bounds: Bounds, padding: floa
     return False
 
 
-def _bounds_for_points(points: tuple[Point, ...], stroke_width: float, arrow_size: float) -> Bounds:
-    padding = max(stroke_width, arrow_size)
+def _bounds_for_points(
+    points: tuple[Point, ...],
+    stroke_width: float,
+    arrow_size: float,
+    *,
+    badge_radius: float = 0.0,
+) -> Bounds:
+    padding = max(stroke_width, arrow_size, badge_radius)
     min_x = min(point.x for point in points) - padding
     min_y = min(point.y for point in points) - padding
     max_x = max(point.x for point in points) + padding

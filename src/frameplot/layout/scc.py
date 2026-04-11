@@ -14,7 +14,7 @@ class SccResult:
 def strongly_connected_components(validated: ValidatedPipeline) -> SccResult:
     adjacency: dict[str, list[str]] = {node.id: [] for node in validated.nodes}
     for edge in validated.edges:
-        adjacency[edge.source].append(edge.target)
+        adjacency[edge.source].append(validated.edge_targets[edge.id].node_id)
 
     for neighbors in adjacency.values():
         neighbors.sort(key=validated.node_index.__getitem__)

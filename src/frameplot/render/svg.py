@@ -70,6 +70,11 @@ def render_svg(layout: LayoutResult, theme: Theme) -> str:
     if layout.detail_panel is not None:
         _render_edges(edge_layer, layout.detail_panel.graph.edges, marker_ids, theme, metrics)
 
+    join_layer = ET.SubElement(root, ET.QName(SVG_NS, "g"), attrib={"id": "edge-joins"})
+    _render_join_badges(join_layer, layout.main.edges, theme)
+    if layout.detail_panel is not None:
+        _render_join_badges(join_layer, layout.detail_panel.graph.edges, theme)
+
     node_layer = ET.SubElement(root, ET.QName(SVG_NS, "g"), attrib={"id": "nodes"})
     _render_nodes(node_layer, layout.main.nodes, theme, metrics)
     if layout.detail_panel is not None:
@@ -260,17 +265,102 @@ def _render_edges(
     metrics: ResolvedThemeMetrics,
 ) -> None:
     for routed_edge in edges:
+        path_points = _render_points_for_edge(routed_edge)
         attributes = {
-            "d": _path_data(routed_edge.points),
+            "d": _path_data(path_points),
             "stroke": routed_edge.stroke,
             "stroke-width": _fmt(theme.stroke_width),
             "stroke-linecap": "round",
             "stroke-linejoin": "round",
-            "marker-end": f"url(#{marker_ids[routed_edge.stroke]})",
         }
+        if routed_edge.show_arrowhead:
+            attributes["marker-end"] = f"url(#{marker_ids[routed_edge.stroke]})"
         if routed_edge.edge.dashed:
             attributes["stroke-dasharray"] = _dasharray(metrics.edge_dasharray)
         ET.SubElement(parent, ET.QName(SVG_NS, "path"), attrib=attributes)
+
+
+def _render_join_badges(
+    parent: ET.Element,
+    edges: tuple[RoutedEdge, ...],
+    theme: Theme,
+) -> None:
+    badge_diameter = max(theme.arrow_size * 1.8, theme.stroke_width * 6.0)
+    badge_radius = badge_diameter / 2.0
+    font_size = badge_diameter * 0.7
+
+    for routed_edge in edges:
+        badge_center = routed_edge.badge_center or routed_edge.join_point
+        if routed_edge.edge.merge_symbol is None or badge_center is None:
+            continue
+
+        ET.SubElement(
+            parent,
+            ET.QName(SVG_NS, "circle"),
+            attrib={
+                "cx": _fmt(badge_center.x),
+                "cy": _fmt(badge_center.y),
+                "r": _fmt(badge_radius),
+                "fill": "#FFFFFF",
+                "stroke": routed_edge.stroke,
+                "stroke-width": _fmt(theme.stroke_width),
+            },
+        )
+        text = ET.SubElement(
+            parent,
+            ET.QName(SVG_NS, "text"),
+            attrib={
+                "x": _fmt(badge_center.x),
+                "y": _fmt(badge_center.y),
+                "fill": routed_edge.stroke,
+                "text-anchor": "middle",
+                "dominant-baseline": "central",
+                "font-family": theme.title_font_family,
+                "font-size": _fmt(font_size),
+                "font-weight": str(theme.title_font_weight),
+            },
+        )
+        text.text = routed_edge.edge.merge_symbol
+
+
+def _render_points_for_edge(routed_edge: RoutedEdge) -> tuple[Point, ...]:
+    if (
+        routed_edge.edge.merge_symbol is None
+        or routed_edge.join_point is None
+        or routed_edge.join_badge_radius <= 0
+        or len(routed_edge.points) < 2
+    ):
+        return routed_edge.points
+
+    start = routed_edge.points[-2]
+    end = routed_edge.points[-1]
+    segment_length = abs(end.x - start.x) + abs(end.y - start.y)
+    if segment_length <= 0.5:
+        return routed_edge.points
+
+    trim = min(routed_edge.join_badge_radius, max(segment_length - 0.5, 0.0))
+    if trim <= 0:
+        return routed_edge.points
+
+    if start.x == end.x:
+        direction = 1 if end.y > start.y else -1
+        trimmed_end = Point(end.x, round(end.y - direction * trim, 2))
+    elif start.y == end.y:
+        direction = 1 if end.x > start.x else -1
+        trimmed_end = Point(round(end.x - direction * trim, 2), end.y)
+    else:
+        return routed_edge.points
+
+    return _collapse_render_points(routed_edge.points[:-1] + (trimmed_end,))
+
+
+def _collapse_render_points(points: tuple[Point, ...]) -> tuple[Point, ...]:
+    collapsed: list[Point] = []
+    for point in points:
+        if collapsed and point == collapsed[-1]:
+            continue
+        collapsed.append(point)
+    return tuple(collapsed)
 
 
 def _render_nodes(

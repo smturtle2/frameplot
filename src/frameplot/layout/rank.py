@@ -14,7 +14,7 @@ def assign_ranks(validated: ValidatedPipeline, scc_result: SccResult) -> dict[st
 
     for edge in validated.edges:
         source_component = scc_result.node_to_component[edge.source]
-        target_component = scc_result.node_to_component[edge.target]
+        target_component = scc_result.node_to_component[validated.edge_targets[edge.id].node_id]
         if source_component == target_component:
             continue
         predecessors[target_component].add(source_component)

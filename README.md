@@ -76,16 +76,40 @@ pipeline.save_png("pipeline.png")
 
 ![Quickstart result](docs/assets/quickstart.png)
 
+## Edge-to-Edge Joins
+
+```python
+from frameplot import Edge, Node, Pipeline
+
+pipeline = Pipeline(
+    nodes=[
+        Node("source", "Source", "Primary request"),
+        Node("worker", "Worker", "Prepare response"),
+        Node("audit", "Audit", "Write side log", fill="#DBEAFE"),
+        Node("done", "Done", "Return result", fill="#D9EAD3"),
+    ],
+    edges=[
+        Edge("e1", "source", "worker"),
+        Edge("e2", "worker", "done"),
+        Edge("e3", "audit", "e2", merge_symbol="+", color="#2563EB"),
+    ],
+)
+```
+
+![Edge join result](docs/assets/edge-join.png)
+
 ## Public API
 
 Top-level imports are the supported public API:
 
 - `Node(id, title, subtitle=None, fill=None, stroke=None, text_color=None, metadata=None, width=None, height=None)`
-- `Edge(id, source, target, color=None, dashed=False, metadata=None)`
+- `Edge(id, source, target, color=None, dashed=False, merge_symbol=None, metadata=None)`
 - `Group(id, label, node_ids, edge_ids=(), stroke=None, fill=None, metadata=None)`
 - `DetailPanel(id, focus_node_id, label, nodes, edges, groups=(), stroke=None, fill=None, metadata=None)`
 - `Theme(...)`
 - `Pipeline(nodes, edges, groups=(), detail_panel=None, theme=None)`
+
+`Edge.target` may reference either a node id or another edge id. When targeting another edge, `merge_symbol="+"` or `"x"` renders a join badge at the merge point.
 
 `Pipeline` exposes:
 
@@ -105,7 +129,7 @@ The hero image at the top and the theme gallery above are generated from [`examp
 ## Design Notes
 
 - Layout is intentionally left-to-right in v0.x.
-- Edge labels are not supported yet.
+- Edge labels are not supported yet, but edge-to-edge joins can render optional `+` / `x` badges.
 - Groups stay visual overlays, and routes leaving or re-entering grouped nodes bend outside grouped areas.
 - Detail panels render as separate lower insets attached to a focus node in the main flow.
 

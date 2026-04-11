@@ -47,9 +47,10 @@ def _forward_neighbors(
     outgoing: dict[str, list[str]] = defaultdict(list)
 
     for edge in validated.edges:
-        if ranks[edge.source] < ranks[edge.target]:
-            incoming[edge.target].append(edge.source)
-            outgoing[edge.source].append(edge.target)
+        target_node_id = validated.edge_targets[edge.id].node_id
+        if ranks[edge.source] < ranks[target_node_id]:
+            incoming[target_node_id].append(edge.source)
+            outgoing[edge.source].append(target_node_id)
 
     return incoming, outgoing
 
@@ -120,10 +121,11 @@ def _detail_focus_path_nodes(
     forward_incoming: dict[str, list[str]] = defaultdict(list)
 
     for edge in validated.edges:
-        if edge.dashed or ranks[edge.source] >= ranks[edge.target]:
+        target_node_id = validated.edge_targets[edge.id].node_id
+        if edge.dashed or ranks[edge.source] >= ranks[target_node_id]:
             continue
-        forward_outgoing[edge.source].append(edge.target)
-        forward_incoming[edge.target].append(edge.source)
+        forward_outgoing[edge.source].append(target_node_id)
+        forward_incoming[target_node_id].append(edge.source)
 
     ancestors = _reachable(focus_node_id, forward_incoming)
     descendants = _reachable(focus_node_id, forward_outgoing)
@@ -152,8 +154,9 @@ def _reachable(start: str, adjacency: dict[str, list[str]]) -> set[str]:
 def _weak_component_nodes(validated: ValidatedPipeline, start_node_id: str) -> set[str]:
     adjacency: dict[str, set[str]] = {node.id: set() for node in validated.nodes}
     for edge in validated.edges:
-        adjacency[edge.source].add(edge.target)
-        adjacency[edge.target].add(edge.source)
+        target_node_id = validated.edge_targets[edge.id].node_id
+        adjacency[edge.source].add(target_node_id)
+        adjacency[target_node_id].add(edge.source)
 
     seen = {start_node_id}
     queue = deque([start_node_id])

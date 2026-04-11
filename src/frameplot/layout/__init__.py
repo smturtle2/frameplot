@@ -139,11 +139,76 @@ def _rank_gap_overrides(
     ).items():
         required_gaps[key] = round(max(required_gaps.get(key, 0.0), required_gap), 2)
 
+    for key, required_gap in _join_target_gap_requirements(
+        validated,
+        placed_nodes,
+        routed_edges,
+    ).items():
+        required_gaps[key] = round(max(required_gaps.get(key, 0.0), required_gap), 2)
+
     for key, required_gap in required_gaps.items():
         if required_gap > base_gap + EPSILON:
             overrides[key] = round(required_gap, 2)
 
     return overrides
+
+
+def _join_target_gap_requirements(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    placed_nodes: dict[str, LayoutNode],
+    routed_edges: tuple[RoutedEdge, ...],
+) -> dict[tuple[int, int], float]:
+    route_by_id = {route.edge.id: route for route in routed_edges}
+    joins_by_target_segment: dict[tuple[str, int], list[RoutedEdge]] = {}
+
+    for routed_edge in routed_edges:
+        if routed_edge.target_kind != "edge" or routed_edge.target_edge_id is None:
+            continue
+        if routed_edge.join_segment_index is None:
+            continue
+        joins_by_target_segment.setdefault(
+            (routed_edge.target_edge_id, routed_edge.join_segment_index),
+            [],
+        ).append(routed_edge)
+
+    required_gaps: dict[tuple[int, int], float] = {}
+    badge_diameter = max(validated.theme.arrow_size * 1.8, validated.theme.stroke_width * 6.0)
+    join_spacing = max(validated.theme.arrow_size * 1.5, validated.theme.stroke_width * 6.0)
+
+    for (target_edge_id, join_segment_index), joins in joins_by_target_segment.items():
+        target_edge = validated.edge_lookup[target_edge_id]
+        target_target = validated.edge_targets[target_edge_id]
+        source_node = placed_nodes[target_edge.source]
+        target_node = placed_nodes[target_target.node_id]
+        target_route = route_by_id.get(target_edge_id)
+        if target_route is None:
+            continue
+        if source_node.component_id != target_node.component_id:
+            continue
+        if source_node.rank >= target_node.rank or source_node.order != target_node.order:
+            continue
+        if join_segment_index >= len(target_route.points) - 1:
+            continue
+
+        start = target_route.points[join_segment_index]
+        end = target_route.points[join_segment_index + 1]
+        if start.y != end.y:
+            continue
+
+        current_segment_length = abs(end.x - start.x)
+        required_segment_length = (
+            validated.theme.route_track_gap
+            + badge_diameter * len(joins)
+            + join_spacing * max(0, len(joins) - 1)
+        )
+        if current_segment_length >= required_segment_length - EPSILON:
+            continue
+
+        required_gap = validated.theme.route_track_gap + (required_segment_length - current_segment_length)
+        key = (source_node.component_id, source_node.rank)
+        required_gaps[key] = max(required_gaps.get(key, 0.0), round(required_gap, 2))
+
+    return required_gaps
 
 
 def _group_boundary_gap_requirements(
@@ -506,6 +571,22 @@ def _shift_edge(route: RoutedEdge, shift_x: float, shift_y: float) -> RoutedEdge
             height=route.bounds.height,
         ),
         stroke=route.stroke,
+        target_kind=route.target_kind,
+        target_node_id=route.target_node_id,
+        target_edge_id=route.target_edge_id,
+        join_point=(
+            Point(route.join_point.x + shift_x, route.join_point.y + shift_y)
+            if route.join_point is not None
+            else None
+        ),
+        badge_center=(
+            Point(route.badge_center.x + shift_x, route.badge_center.y + shift_y)
+            if route.badge_center is not None
+            else None
+        ),
+        join_segment_index=route.join_segment_index,
+        show_arrowhead=route.show_arrowhead,
+        join_badge_radius=route.join_badge_radius,
     )
 
 

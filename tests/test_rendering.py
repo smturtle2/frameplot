@@ -10,7 +10,7 @@ import pytest
 from frameplot import DetailPanel, Edge, Group, Node, Pipeline, Theme
 from frameplot.layout import build_layout
 from frameplot.layout.route import _build_component_geometry, _route_forward
-from frameplot.layout.types import LayoutNode
+from frameplot.layout.types import LayoutNode, Point
 from frameplot.render.png import PNG_SIGNATURE
 from frameplot.render.png import DEFAULT_PNG_SCALE
 from frameplot.theme import resolve_theme_metrics
@@ -102,6 +102,45 @@ def _segment_crossings(points_a, points_b) -> list[tuple[float, float]]:
                     crossings.append((x, y))
 
     return crossings
+
+
+def _point_on_segment(point, start, end) -> bool:
+    if start.x == end.x == point.x:
+        top, bottom = sorted((start.y, end.y))
+        return top <= point.y <= bottom
+    if start.y == end.y == point.y:
+        left, right = sorted((start.x, end.x))
+        return left <= point.x <= right
+    return False
+
+
+def _path_points(path_data: str) -> tuple[Point, ...]:
+    tokens = path_data.split()
+    points: list[Point] = []
+    index = 0
+
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"M", "L"}:
+            points.append(Point(float(tokens[index + 1]), float(tokens[index + 2])))
+            index += 3
+            continue
+        index += 1
+
+    return tuple(points)
+
+
+def _polyline_length(points) -> float:
+    return sum(abs(start.x - end.x) + abs(start.y - end.y) for start, end in zip(points, points[1:]))
+
+
+def _distance_to_point_on_path(points: tuple[Point, ...], point: Point) -> float:
+    travelled = 0.0
+    for start, end in zip(points, points[1:]):
+        if _point_on_segment(point, start, end):
+            return travelled + abs(point.x - start.x) + abs(point.y - start.y)
+        travelled += abs(end.x - start.x) + abs(end.y - start.y)
+    raise AssertionError("Point is not on path.")
 
 
 def build_sample_pipeline() -> Pipeline:
@@ -441,7 +480,7 @@ def test_validation_raises_for_unknown_nodes() -> None:
         edges=[Edge("e1", "start", "missing")],
     )
 
-    with pytest.raises(ValueError, match="missing target node"):
+    with pytest.raises(ValueError, match="missing target node or edge"):
         pipeline.to_svg()
 
 
@@ -459,6 +498,46 @@ def test_validation_raises_for_unknown_detail_focus_node() -> None:
     )
 
     with pytest.raises(ValueError, match="missing focus node"):
+        pipeline.to_svg()
+
+
+def test_validation_rejects_node_and_edge_id_collisions() -> None:
+    pipeline = Pipeline(
+        nodes=[Node("dup", "Node"), Node("other", "Other")],
+        edges=[Edge("dup", "other", "dup")],
+    )
+
+    with pytest.raises(ValueError, match="Duplicate id shared by node and edge"):
+        pipeline.to_svg()
+
+
+def test_validation_rejects_merge_symbol_on_node_target() -> None:
+    pipeline = Pipeline(
+        nodes=[Node("start", "Start"), Node("done", "Done")],
+        edges=[Edge("e1", "start", "done", merge_symbol="+")],
+    )
+
+    with pytest.raises(ValueError, match="sets merge_symbol but targets node"):
+        pipeline.to_svg()
+
+
+def test_validation_rejects_edge_to_edge_chains() -> None:
+    pipeline = Pipeline(
+        nodes=[
+            Node("a", "A"),
+            Node("b", "B"),
+            Node("c", "C"),
+            Node("d", "D"),
+            Node("e", "E"),
+        ],
+        edges=[
+            Edge("e1", "a", "b"),
+            Edge("e2", "c", "e1"),
+            Edge("e3", "d", "e2"),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="edge-to-edge chains are not supported"):
         pipeline.to_svg()
 
 
@@ -558,6 +637,179 @@ def test_svg_handles_back_edges_and_self_loops() -> None:
     assert "Execution" in svg
     assert 'stroke="#EA580C"' in svg
     assert 'stroke-dasharray="8 6"' in svg
+
+
+def test_default_theme_uses_larger_arrowheads() -> None:
+    pipeline = Pipeline(
+        nodes=[Node("start", "Start"), Node("done", "Done")],
+        edges=[Edge("e1", "start", "done")],
+    )
+    root = ET.fromstring(pipeline.to_svg())
+    marker = root.find(".//svg:marker", SVG_NS)
+
+    assert marker is not None
+    assert marker.attrib["markerWidth"] == "8"
+    assert marker.attrib["markerHeight"] == "8"
+
+
+def test_edge_target_join_terminates_on_target_edge_segment() -> None:
+    pipeline = Pipeline(
+        nodes=[Node("a", "A"), Node("b", "B"), Node("c", "C"), Node("d", "D")],
+        edges=[
+            Edge("e1", "a", "b"),
+            Edge("e2", "c", "d"),
+            Edge("e3", "a", "e2", merge_symbol="+", color="#C0504D"),
+        ],
+    )
+
+    layout = build_layout(pipeline)
+    routed = {edge.edge.id: edge for edge in layout.main.edges}
+    join_edge = routed["e3"]
+    target_edge = routed["e2"]
+    target_node = layout.main.nodes["d"]
+
+    assert join_edge.target_kind == "edge"
+    assert join_edge.target_edge_id == "e2"
+    assert join_edge.join_point == join_edge.points[-1]
+    assert join_edge.join_point is not None
+    assert join_edge.badge_center is not None
+    assert join_edge.badge_center == join_edge.join_point
+    assert any(
+        _point_on_segment(join_edge.join_point, start, end)
+        for start, end in zip(target_edge.points, target_edge.points[1:])
+    )
+    assert _distance_to_point_on_path(target_edge.points, join_edge.join_point) == pytest.approx(
+        _polyline_length(target_edge.points) / 2.0,
+        abs=0.2,
+    )
+    assert join_edge.join_point.x < target_node.x
+
+
+def test_edge_target_join_lengthens_target_edge() -> None:
+    base_pipeline = Pipeline(
+        nodes=[Node("a", "A"), Node("b", "B"), Node("c", "C"), Node("d", "D")],
+        edges=[
+            Edge("e1", "a", "b"),
+            Edge("e2", "c", "d"),
+        ],
+    )
+    joined_pipeline = Pipeline(
+        nodes=[Node("a", "A"), Node("b", "B"), Node("c", "C"), Node("d", "D")],
+        edges=[
+            Edge("e1", "a", "b"),
+            Edge("e2", "c", "d"),
+            Edge("e3", "a", "e2", merge_symbol="+"),
+        ],
+    )
+
+    base_layout = build_layout(base_pipeline)
+    joined_layout = build_layout(joined_pipeline)
+
+    base_target = next(edge for edge in base_layout.main.edges if edge.edge.id == "e2")
+    joined_target = next(edge for edge in joined_layout.main.edges if edge.edge.id == "e2")
+
+    assert _polyline_length(joined_target.points) > _polyline_length(base_target.points)
+
+
+def test_edge_target_join_picks_nearest_eligible_segment() -> None:
+    pipeline = Pipeline(
+        nodes=[Node("s", "S"), Node("m", "M"), Node("t", "T"), Node("alt", "Alt"), Node("sink2", "Sink2")],
+        edges=[
+            Edge("e1", "s", "m"),
+            Edge("e2", "m", "t"),
+            Edge("e3", "s", "t"),
+            Edge("e4", "alt", "sink2"),
+            Edge("e5", "sink2", "e3"),
+        ],
+    )
+
+    layout = build_layout(pipeline)
+    routed = {edge.edge.id: edge for edge in layout.main.edges}
+    join_edge = routed["e5"]
+    target_edge = routed["e3"]
+    source_node = layout.main.nodes["sink2"]
+    source_point = source_node.right, source_node.center_y
+
+    assert join_edge.join_point is not None
+
+    eligible_distances = []
+    for start, end in zip(target_edge.points, target_edge.points[1:]):
+        if start.x == end.x:
+            top, bottom = sorted((start.y, end.y))
+            point = (start.x, min(max(source_point[1], top), bottom))
+            distance = abs(source_point[0] - point[0]) + abs(source_point[1] - point[1])
+            eligible_distances.append(distance)
+        elif start.y == end.y:
+            left, right = sorted((start.x, end.x))
+            point = (min(max(source_point[0], left), right), start.y)
+            distance = abs(source_point[0] - point[0]) + abs(source_point[1] - point[1])
+            eligible_distances.append(distance)
+
+    chosen_distance = min(eligible_distances)
+
+    assert abs(source_point[0] - join_edge.join_point.x) + abs(source_point[1] - join_edge.join_point.y) == chosen_distance
+
+
+def test_edge_target_join_without_merge_symbol_keeps_arrowhead() -> None:
+    pipeline = Pipeline(
+        nodes=[Node("a", "A"), Node("b", "B"), Node("c", "C"), Node("d", "D")],
+        edges=[
+            Edge("e1", "a", "b"),
+            Edge("e2", "c", "d"),
+            Edge("e3", "a", "e2"),
+        ],
+    )
+    root = ET.fromstring(pipeline.to_svg())
+    edge_paths = root.findall(".//svg:g[@id='edges']/svg:path", SVG_NS)
+    join_badges = root.findall(".//svg:g[@id='edge-joins']/svg:text", SVG_NS)
+
+    assert len(edge_paths) == 3
+    assert all("marker-end" in path.attrib for path in edge_paths)
+    assert not join_badges
+
+
+def test_edge_target_join_with_merge_symbol_renders_badge_without_arrowhead() -> None:
+    pipeline = Pipeline(
+        nodes=[Node("a", "A"), Node("b", "B"), Node("c", "C"), Node("d", "D")],
+        edges=[
+            Edge("e1", "a", "b"),
+            Edge("e2", "c", "d"),
+            Edge("e3", "a", "e2", merge_symbol="+", color="#C0504D"),
+        ],
+    )
+    root = ET.fromstring(pipeline.to_svg())
+    edge_paths = root.findall(".//svg:g[@id='edges']/svg:path", SVG_NS)
+    join_text = root.find(".//svg:g[@id='edge-joins']/svg:text", SVG_NS)
+    join_circle = root.find(".//svg:g[@id='edge-joins']/svg:circle", SVG_NS)
+    join_path = next(path for path in edge_paths if path.attrib["stroke"] == "#C0504D")
+    target_paths = [path for path in edge_paths if path.attrib["stroke"] != "#C0504D"]
+
+    assert len(edge_paths) == 3
+    assert sum("marker-end" in path.attrib for path in edge_paths) == 2
+    assert join_text is not None
+    assert join_circle is not None
+    assert join_text.text == "+"
+    assert join_circle.attrib["fill"] == "#FFFFFF"
+
+    circle_center = Point(float(join_circle.attrib["cx"]), float(join_circle.attrib["cy"]))
+    join_points = _path_points(join_path.attrib["d"])
+    target_polylines = [_path_points(path.attrib["d"]) for path in target_paths]
+    target_total_length = max(_polyline_length(points) for points in target_polylines)
+
+    assert join_points[-1] != circle_center
+    assert any(
+        _point_on_segment(circle_center, start, end)
+        for points in target_polylines
+        for start, end in zip(points, points[1:])
+    )
+    assert min(
+        abs(circle_center.x - points[0].x) + abs(circle_center.y - points[0].y)
+        for points in target_polylines
+    ) == pytest.approx(target_total_length / 2.0, abs=0.2)
+
+    layout = build_layout(pipeline)
+    join_edge = next(edge for edge in layout.main.edges if edge.edge.id == "e3")
+    assert join_edge.join_point == join_edge.badge_center
 
 
 def test_svg_serializes_resolved_dash_and_marker_metrics() -> None:

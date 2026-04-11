@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(slots=True)
@@ -44,8 +44,10 @@ class Node:
 class Edge:
     """Connect two nodes with a directional edge.
 
-    `source` and `target` must reference node identifiers in the same graph.
-    Set `dashed=True` to draw a secondary or conditional flow.
+    `source` must reference a node identifier in the same graph. `target` may
+    reference either a node identifier or another edge identifier to create an
+    edge-to-edge join. Set `dashed=True` to draw a secondary or conditional
+    flow.
     """
 
     id: str
@@ -53,16 +55,21 @@ class Edge:
     target: str
     color: str | None = None
     dashed: bool = False
+    merge_symbol: Literal["+", "x"] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.id = self.id.strip()
         self.source = self.source.strip()
         self.target = self.target.strip()
+        if self.merge_symbol is not None:
+            self.merge_symbol = self.merge_symbol.strip() or None
         if not self.id:
             raise ValueError("Edge id must not be empty.")
         if not self.source or not self.target:
             raise ValueError("Edge source and target must not be empty.")
+        if self.merge_symbol not in (None, "+", "x"):
+            raise ValueError("Edge merge_symbol must be one of '+', 'x', or None.")
 
 
 @dataclass(slots=True)

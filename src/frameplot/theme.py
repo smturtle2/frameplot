@@ -123,7 +123,7 @@ class Theme:
     detail_panel_corner_radius: float = 20.0
     detail_panel_guide_color: str = "#CBD5E1"
     detail_panel_guide_width: float = 1.5
-    arrow_size: float = 6.0
+    arrow_size: float = 8.0
     route_track_gap: float = 20.0
     back_edge_gap: float = 30.0
     self_loop_size: float = 32.0

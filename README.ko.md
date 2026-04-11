@@ -76,16 +76,40 @@ pipeline.save_png("pipeline.png")
 
 ![Quickstart result](docs/assets/quickstart.png)
 
+## Edge-to-Edge 합류
+
+```python
+from frameplot import Edge, Node, Pipeline
+
+pipeline = Pipeline(
+    nodes=[
+        Node("source", "Source", "Primary request"),
+        Node("worker", "Worker", "Prepare response"),
+        Node("audit", "Audit", "Write side log", fill="#DBEAFE"),
+        Node("done", "Done", "Return result", fill="#D9EAD3"),
+    ],
+    edges=[
+        Edge("e1", "source", "worker"),
+        Edge("e2", "worker", "done"),
+        Edge("e3", "audit", "e2", merge_symbol="+", color="#2563EB"),
+    ],
+)
+```
+
+![Edge join result](docs/assets/edge-join.png)
+
 ## 공개 API
 
 공식적으로 지원하는 공개 API는 top-level import 기준입니다.
 
 - `Node(id, title, subtitle=None, fill=None, stroke=None, text_color=None, metadata=None, width=None, height=None)`
-- `Edge(id, source, target, color=None, dashed=False, metadata=None)`
+- `Edge(id, source, target, color=None, dashed=False, merge_symbol=None, metadata=None)`
 - `Group(id, label, node_ids, edge_ids=(), stroke=None, fill=None, metadata=None)`
 - `DetailPanel(id, focus_node_id, label, nodes, edges, groups=(), stroke=None, fill=None, metadata=None)`
 - `Theme(...)`
 - `Pipeline(nodes, edges, groups=(), detail_panel=None, theme=None)`
+
+`Edge.target`은 node id 또는 다른 edge id를 가리킬 수 있습니다. 다른 edge로 합류할 때 `merge_symbol="+"` 또는 `"x"`를 주면 merge 지점에 배지가 렌더됩니다.
 
 `Pipeline` 메서드:
 
@@ -105,7 +129,7 @@ pipeline.save_png("pipeline.png")
 ## 참고 사항
 
 - v0.x에서는 좌에서 우 레이아웃만 지원합니다.
-- edge label은 아직 지원하지 않습니다.
+- edge label은 아직 지원하지 않지만, edge-to-edge 합류 지점에는 선택적으로 `+` / `x` 배지를 그릴 수 있습니다.
 - 그룹은 시각적 오버레이이며, grouped node를 드나드는 라우트는 그룹 바깥에서 bend합니다.
 - detail panel은 메인 플로우 아래쪽의 별도 inset 블록으로 렌더링됩니다.
 

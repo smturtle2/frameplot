@@ -79,7 +79,7 @@ def build_pipeline() -> Pipeline:
         nodes=nodes,
         edges=edges,
         detail_panel=detail_panel,
-        theme=Theme.pastel()
+        theme=Theme.themes.monochrome()
     )
 
 def main() -> None:

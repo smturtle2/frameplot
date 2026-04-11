@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable, ClassVar
 
 
 @dataclass(slots=True, frozen=True)
@@ -56,6 +57,21 @@ class ResolvedThemeMetrics:
     guide_flare_min_factor: float
     guide_bend_ratio: float
     guide_min_bend_drop: float
+
+
+@dataclass(slots=True, frozen=True)
+class ThemeRegistry:
+    retro: Callable[[], "Theme"]
+    dark: Callable[[], "Theme"]
+    cyberpunk: Callable[[], "Theme"]
+    pastel: Callable[[], "Theme"]
+    monochrome: Callable[[], "Theme"]
+
+    def __iter__(self):
+        return iter(("retro", "dark", "cyberpunk", "pastel", "monochrome"))
+
+    def __getitem__(self, name: str) -> Callable[[], "Theme"]:
+        return getattr(self, name)
 
 
 @dataclass(slots=True)
@@ -117,144 +133,189 @@ class Theme:
     shadow_offset_y: float = 2.0
     show_group_accent_line: bool = True
     color_palette: tuple[str, ...] | None = None
+    themes: ClassVar[ThemeRegistry]
 
     @classmethod
     def retro(cls) -> 'Theme':
-        """A nostalgic retro theme with warm, vintage colors and strong borders."""
+        """A nostalgic ink-and-paper theme on a white canvas."""
         return cls(
-            background_color="transparent",
+            background_color="#FFFFFF",
             node_fill="#F4EBD9",
             node_stroke="#111111",
-            node_text_color="#111111",
+            node_text_color="#2B1B16",
             edge_color="#111111",
             group_stroke="#111111",
-            group_fill="transparent",
-            group_label_color="#111111",
-            detail_panel_fill="#FAF8F5",
+            group_fill="#FFFFFF",
+            group_label_color="#2B1B16",
+            detail_panel_fill="#FFFFFF",
             detail_panel_stroke="#111111",
             detail_panel_stroke_width=2.5,
-            detail_panel_title_color="#111111",
+            detail_panel_title_color="#2B1B16",
             detail_panel_guide_color="#D1C8B4",
             detail_panel_corner_radius=0.0,
-            group_fill_opacity=0.0,
+            group_fill_opacity=0.22,
             stroke_width=2.5,
             corner_radius=0.0,
             group_corner_radius=0.0,
             shadow_blur=0.0,
-            shadow_opacity=1.0,
-            shadow_offset_y=6.0,
+            shadow_opacity=0.16,
+            shadow_offset_y=4.0,
+            detail_panel_fill_opacity=0.82,
             color_palette=(
-                "#FF6B6B", "#FCA5A5", "#FDE047", "#86EFAC",
-                "#93C5FD", "#A78BFA", "#F472B6", "#FDBA74"
+                "#D92938", "#F2916D", "#F1D194", "#3B5145", "#243A2E",
             )
         )
 
     @classmethod
     def dark(cls) -> 'Theme':
-        """A modern dark mode theme with slate and zinc tones."""
+        """A white-canvas editorial slate theme with rounded cards and depth."""
         return cls(
-            background_color="#0F172A",  # Slate 900
-            node_fill="#1E293B",  # Slate 800
-            node_stroke="#475569",  # Slate 600
-            node_text_color="#F8FAFC",  # Slate 50
-            edge_color="#94A3B8",  # Slate 400
-            group_stroke="#334155",  # Slate 700
-            group_fill="#0F172A",  # Slate 900
-            group_label_color="#CBD5E1",  # Slate 300
-            detail_panel_fill="#1E293B",
-            detail_panel_stroke="#334155",
-            detail_panel_title_color="#94A3B8",
-            detail_panel_guide_color="#1E293B",
-            group_fill_opacity=0.4,
-            shadow_opacity=0.3,
+            background_color="#FFFFFF",
+            node_fill="#FFFFFF",
+            node_stroke="#171A26",
+            node_text_color="#0F172A",
+            edge_color="#2C3540",
+            group_stroke="#425059",
+            group_fill="#171A26",
+            group_label_color="#171A26",
+            title_font_family="'DejaVu Serif', Georgia, 'Times New Roman', serif",
+            title_font_weight=650,
+            subtitle_font_weight=450,
+            detail_panel_fill="#F7F9FB",
+            detail_panel_stroke="#425059",
+            detail_panel_title_color="#171A26",
+            detail_panel_guide_color="#808C8B",
+            detail_panel_fill_opacity=0.96,
+            detail_panel_stroke_width=1.5,
+            detail_panel_corner_radius=18.0,
+            group_fill_opacity=0.07,
+            stroke_width=1.75,
+            group_stroke_width=1.25,
+            corner_radius=16.0,
+            group_corner_radius=22.0,
+            shadow_blur=12.0,
+            shadow_opacity=0.09,
+            shadow_offset_y=5.0,
+            show_group_accent_line=False,
             color_palette=(
-                "#F87171", "#FACC15", "#4ADE80", "#2DD4BF",
-                "#60A5FA", "#A78BFA", "#F472B6", "#FB923C"
-            )
+                "#171A26", "#2C3540", "#425059", "#657371", "#808C8B",
+            ),
         )
 
     @classmethod
     def cyberpunk(cls) -> 'Theme':
-        """A high-contrast neon theme with sharp corners."""
+        """A white-canvas techno theme with sharp geometry and hard contrast."""
         return cls(
-            background_color="#050511",
-            node_fill="#000000",
-            node_stroke="#FF00FF",  # Magenta
-            node_text_color="#00FF41",  # Neon Green
-            edge_color="#00FFFF",  # Cyan
-            group_stroke="#00FFFF",
-            group_fill="#110022",
-            group_label_color="#FFFF00",  # Yellow
-            detail_panel_fill="#000000",
-            detail_panel_stroke="#FF00FF",
-            detail_panel_stroke_width=2.0,
-            detail_panel_title_color="#00FF41",
-            detail_panel_guide_color="#220022",
+            background_color="#FFFFFF",
+            node_fill="#FFFFFF",
+            node_stroke="#171A26",
+            node_text_color="#0F172A",
+            edge_color="#F25E5E",
+            group_stroke="#4A79D9",
+            group_fill="#B6F2F2",
+            group_label_color="#F25E5E",
+            title_font_family="'DejaVu Sans Mono', 'IBM Plex Mono', Menlo, Consolas, monospace",
+            title_font_weight=700,
+            subtitle_font_size=11.5,
+            subtitle_font_weight=500,
+            detail_panel_fill="#F8FFFF",
+            detail_panel_stroke="#F25E5E",
+            detail_panel_stroke_width=2.5,
+            detail_panel_title_color="#4A79D9",
+            detail_panel_guide_color="#F2B56B",
+            detail_panel_fill_opacity=0.94,
             detail_panel_corner_radius=0.0,
-            group_fill_opacity=0.6,
-            stroke_width=2.0,
+            group_fill_opacity=0.06,
+            stroke_width=2.25,
+            group_stroke_width=1.75,
             corner_radius=0.0,
             group_corner_radius=0.0,
-            shadow_blur=8.0,
-            shadow_opacity=0.8,
+            shadow_blur=0.0,
+            shadow_opacity=0.0,
             shadow_offset_y=0.0,
+            show_group_accent_line=False,
             color_palette=(
-                "#FF00FF", "#00FFFF", "#00FF41", "#FFFF00",
-                "#FF003C", "#B026FF", "#04D9FF", "#FF71CE"
-            )
+                "#4A79D9", "#B6F2F2", "#F2B56B", "#F27A5E", "#F25E5E",
+            ),
         )
 
     @classmethod
     def pastel(cls) -> 'Theme':
-        """A soft, friendly theme with pastel tones and rounded corners."""
+        """A white-canvas soft editorial theme with pill shapes and airy shadows."""
         return cls(
-            background_color="#FDFBF7",
+            background_color="#FFFFFF",
             node_fill="#FFFFFF",
-            node_stroke="#FFB3BA",
-            node_text_color="#5D5D5D",
-            edge_color="#BAE1FF",
-            group_stroke="#FFFFBA",
-            group_fill="#FFDFBA",
-            group_label_color="#8B8B8B",
-            detail_panel_fill="#FFFFFF",
-            detail_panel_stroke="#BAE1FF",
-            detail_panel_title_color="#8B8B8B",
-            detail_panel_guide_color="#E8F4FF",
-            group_fill_opacity=0.3,
-            corner_radius=20.0,
-            group_corner_radius=24.0,
+            node_stroke="#D8A7B5",
+            node_text_color="#5A5568",
+            edge_color="#8FB7CC",
+            group_stroke="#D8A7B5",
+            group_fill="#FFFFFF",
+            group_label_color="#8A7188",
+            title_font_family="'DejaVu Sans', 'Trebuchet MS', 'Segoe UI', sans-serif",
+            title_font_weight=650,
+            subtitle_font_weight=500,
+            detail_panel_fill="#FFFCFB",
+            detail_panel_stroke="#CFE3EC",
+            detail_panel_title_color="#8A7188",
+            detail_panel_guide_color="#E9F3F7",
+            detail_panel_fill_opacity=0.98,
+            detail_panel_corner_radius=32.0,
+            group_fill_opacity=0.94,
+            stroke_width=1.25,
+            group_stroke_width=1.1,
+            corner_radius=28.0,
+            group_corner_radius=32.0,
+            shadow_blur=8.0,
+            shadow_opacity=0.07,
+            shadow_offset_y=4.0,
+            show_group_accent_line=False,
             color_palette=(
-                "#FFB3BA", "#FFDFBA", "#FFFFBA", "#BAFFC9",
-                "#BAE1FF", "#E8BAFF", "#FFB3F7", "#FFC6FF"
-            )
+                "#A8E6CF", "#DCEDC1", "#FFE8D4", "#FFAAA5", "#FF8BA6",
+            ),
         )
 
     @classmethod
     def monochrome(cls) -> 'Theme':
-        """A grayscale, high-clarity theme perfect for printing."""
+        """A crisp blueprint-like monochrome theme with restrained technical lines."""
         return cls(
             background_color="#FFFFFF",
             node_fill="#FFFFFF",
-            node_stroke="#000000",
-            node_text_color="#000000",
-            edge_color="#000000",
-            group_stroke="#000000",
-            group_fill="#F0F0F0",
-            group_label_color="#000000",
-            detail_panel_fill="#FFFFFF",
-            detail_panel_stroke="#000000",
-            detail_panel_title_color="#000000",
-            detail_panel_guide_color="#E0E0E0",
-            group_fill_opacity=1.0,
+            node_stroke="#3C4A73",
+            node_text_color="#111111",
+            edge_color="#576BA6",
+            group_stroke="#8890A6",
+            group_fill="#576BA6",
+            group_label_color="#3C4A73",
+            title_font_family="'DejaVu Sans Mono', Menlo, Consolas, monospace",
+            title_font_weight=600,
+            subtitle_font_size=11.5,
+            detail_panel_fill="#FAFBFF",
+            detail_panel_stroke="#8890A6",
+            detail_panel_title_color="#3C4A73",
+            detail_panel_guide_color="#C8D3F3",
+            detail_panel_fill_opacity=0.98,
+            detail_panel_stroke_width=1.5,
+            detail_panel_corner_radius=8.0,
+            group_fill_opacity=0.1,
+            stroke_width=1.25,
+            group_stroke_width=1.35,
+            corner_radius=8.0,
+            group_corner_radius=12.0,
             shadow_blur=0.0,
             shadow_opacity=0.0,
             shadow_offset_y=0.0,
+            show_group_accent_line=False,
             color_palette=(
-                "#000000", "#333333", "#666666", "#999999",
-                "#CCCCCC", "#E5E5E5", "#111111", "#444444"
-            )
+                "#4A4E59", "#8890A6", "#3C4A73", "#576BA6", "#C8D3F3",
+            ),
         )
-
+Theme.themes = ThemeRegistry(
+    retro=Theme.retro,
+    dark=Theme.dark,
+    cyberpunk=Theme.cyberpunk,
+    pastel=Theme.pastel,
+    monochrome=Theme.monochrome,
+)
 
 
 def resolve_theme_metrics(theme: Theme) -> ResolvedThemeMetrics:

@@ -297,12 +297,12 @@ def _render_node(
     node = layout_node.node
     node_group = ET.SubElement(parent, ET.QName(SVG_NS, "g"), attrib={"id": element_id})
 
-    default_fill = (
+    resolved_fill = node.fill or (
         theme.color_palette[palette_index % len(theme.color_palette)]
         if theme.color_palette
         else theme.node_fill
     )
-    
+
     _render_shadow_layers(
         node_group,
         x=layout_node.x,
@@ -324,7 +324,7 @@ def _render_node(
             "height": _fmt(layout_node.height),
             "rx": _fmt(theme.corner_radius),
             "ry": _fmt(theme.corner_radius),
-            "fill": node.fill or default_fill,
+            "fill": resolved_fill,
             "stroke": node.stroke or theme.node_stroke,
             "stroke-width": _fmt(theme.stroke_width),
         },
@@ -335,7 +335,7 @@ def _render_node(
     current_top = content_top
     title_ascent = theme.title_font_size * metrics.title_baseline_ratio
     subtitle_ascent = theme.subtitle_font_size * metrics.subtitle_baseline_ratio
-    text_color = node.text_color or theme.node_text_color
+    text_color = node.text_color or _auto_text_color(resolved_fill, theme.node_text_color)
 
     for line in layout_node.title_lines:
         current_top += layout_node.title_line_height
@@ -373,6 +373,52 @@ def _render_node(
                 },
             )
             sub_text_el.text = line
+
+
+def _auto_text_color(fill: str, fallback: str) -> str:
+    rgb = _parse_color(fill)
+    if rgb is None:
+        return fallback
+
+    # WCAG relative luminance heuristic for picking black/white text.
+    luminance = _relative_luminance(rgb)
+    contrast_with_black = (luminance + 0.05) / 0.05
+    contrast_with_white = 1.05 / (luminance + 0.05)
+    return "#111111" if contrast_with_black >= contrast_with_white else "#FFFFFF"
+
+
+def _parse_color(value: str) -> tuple[int, int, int] | None:
+    color = value.strip()
+    if color.startswith("#"):
+        hex_color = color[1:]
+        if len(hex_color) == 3:
+            hex_color = "".join(component * 2 for component in hex_color)
+        if len(hex_color) != 6:
+            return None
+        try:
+            return tuple(int(hex_color[index:index + 2], 16) for index in (0, 2, 4))
+        except ValueError:
+            return None
+
+    normalized = color.lower().removeprefix("rgb(").removesuffix(")")
+    parts = [part.strip() for part in normalized.split(",")]
+    if len(parts) != 3:
+        return None
+    try:
+        return tuple(max(0, min(255, int(part))) for part in parts)
+    except ValueError:
+        return None
+
+
+def _relative_luminance(rgb: tuple[int, int, int]) -> float:
+    channels = []
+    for channel in rgb:
+        value = channel / 255.0
+        if value <= 0.04045:
+            channels.append(value / 12.92)
+        else:
+            channels.append(((value + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
 
 
 def _build_markers(

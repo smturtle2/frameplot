@@ -9,9 +9,21 @@
 
 [English README](https://github.com/smturtle2/frameplot/blob/main/README.md)
 
-![frameplot hero image](docs/assets/frameplot-hero-new.png)
+![frameplot hero image](docs/assets/frameplot-hero-retro.png)
 
-`frameplot`은 왼쪽에서 오른쪽으로 흐르는 파이프라인 다이어그램을 깔끔한 기본값으로 렌더링하는 경량 파이썬 라이브러리입니다. 노드, 엣지, 그룹, 그리고 선택적인 detail panel을 파이썬 데이터 구조로 정의한 뒤, 문서용 SVG나 발표 자료용 PNG로 바로 내보낼 수 있습니다.
+`frameplot`은 왼쪽에서 오른쪽으로 흐르는 파이프라인 다이어그램을 깔끔한 기본값으로 렌더링하는 경량 파이썬 라이브러리입니다. 노드, 엣지, 그룹, 그리고 선택적인 detail panel을 파이썬 데이터 구조로 정의한 뒤, 문서용 SVG나 고해상도 발표 자료용 PNG로 바로 내보낼 수 있습니다.
+
+## 테마 갤러리
+
+모든 내장 프리셋은 흰 캔버스 위에 렌더됩니다. 같은 hero 파이프라인을 각 테마로 한 번씩 렌더해 바로 비교할 수 있게 정리했습니다.
+
+| Retro | Pastel | Dark |
+| --- | --- | --- |
+| ![Retro theme hero](docs/assets/frameplot-hero-retro.png) | ![Pastel theme hero](docs/assets/frameplot-hero-pastel.png) | ![Dark theme hero](docs/assets/frameplot-hero-dark.png) |
+
+| Cyberpunk | Monochrome |
+| --- | --- |
+| ![Cyberpunk theme hero](docs/assets/frameplot-hero-cyberpunk.png) | ![Monochrome theme hero](docs/assets/frameplot-hero-monochrome.png) |
 
 ## 특징
 
@@ -19,6 +31,7 @@
 - **Diagram as Code**: 파이썬 코드로 파이프라인을 정의하고, 결정적인 SVG/PNG 결과물을 얻습니다.
 - **상세 패널 (Detail Panel)**: 요약 노드를 하단 inset 미니 그래프로 확장하여 세부 로직을 명확히 설명하는 독보적인 기능.
 - **강력한 커스터마이징**: `Theme`을 통해 폰트, 간격, 색상, 모서리 곡률(radius) 등을 정밀하게 조정 가능.
+- **화이트 캔버스 테마**: 내장 프리셋이 기본적으로 흰 배경 위에 렌더되어 문서와 슬라이드에 바로 붙일 수 있습니다.
 - **발표 및 문서 최적화**: 웹용 고해상도 SVG와 슬라이드/논문용 PNG 출력을 지원합니다.
 
 ## 설치
@@ -74,16 +87,16 @@ pipeline.save_png("pipeline.png")
 
 - `to_svg() -> str`
 - `save_svg(path) -> None`
-- `to_png_bytes() -> bytes`
-- `save_png(path) -> None`
+- `to_png_bytes(scale=4.0) -> bytes`
+- `save_png(path, scale=4.0) -> None`
 
 ## 고급 예제: 멀티 클라우드 데이터 파이프라인
 
-상단 hero 이미지는 현대적인 **멀티 클라우드 데이터 파이프라인** 아키텍처를 모델링한 사례로, [`examples/hero_new.py`](https://github.com/smturtle2/frameplot/blob/main/examples/hero_new.py)에서 생성되었습니다. 다음과 같은 특징을 보여줍니다:
+상단 hero 이미지와 위의 테마 갤러리는 [`examples/theme_heroes.py`](https://github.com/smturtle2/frameplot/blob/main/examples/theme_heroes.py)에서 생성되며, 공통 파이프라인 정의는 [`examples/hero_pipeline.py`](https://github.com/smturtle2/frameplot/blob/main/examples/hero_pipeline.py)에 있습니다. 함께 다음과 같은 특징을 보여줍니다:
 
 - **클라우드 간 연결**: AWS(S3/Lambda)에서 GCP(Pub/Sub/Dataflow) 서비스로 이어지는 복잡한 흐름 시각화.
 - **컨텍스트 유지**: `DetailPanel`을 사용하여 "Dataflow" 노드 내부의 Spark Job 파이프라인을 메인 흐름을 방해하지 않고 상세 설명.
-- **다크 모드 스타일링**: 세련된 **Slate/Zinc** 톤의 다크 테마를 적용하여 현대적인 디자인 구현.
+- **레트로 에디토리얼 스타일링**: 흰 캔버스 위에 `Theme.retro()` 프리셋을 적용한 대표 예제입니다.
 
 ## 참고 사항
 
@@ -101,4 +114,4 @@ python -m pip install -e '.[dev]'
 python -m pytest -q
 ```
 
-배포는 GitHub Actions와 PyPI Trusted Publishing으로 자동화합니다. `pyproject.toml`의 버전을 올린 뒤 `v0.3.0` 같은 태그를 푸시하면 `.github/workflows/workflow.yml`에서 릴리스가 시작됩니다.
+배포는 GitHub Actions와 PyPI Trusted Publishing으로 자동화합니다. `pyproject.toml`의 버전을 올린 뒤 `v0.4.0` 같은 태그를 푸시하면 `.github/workflows/workflow.yml`에서 릴리스가 시작됩니다.

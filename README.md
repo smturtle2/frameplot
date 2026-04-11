@@ -9,9 +9,21 @@ Turn Python-defined pipeline graphs into presentation-ready SVG and PNG diagrams
 
 [한국어 README](https://github.com/smturtle2/frameplot/blob/main/README.ko.md)
 
-![frameplot hero image](docs/assets/frameplot-hero-new.png)
+![frameplot hero image](docs/assets/frameplot-hero-retro.png)
 
-`frameplot` is a compact Python library for rendering left-to-right pipeline diagrams with clean defaults. Define nodes, edges, groups, and optional detail panels in plain Python, then export polished SVG for documentation or PNG for slides and papers.
+`frameplot` is a compact Python library for rendering left-to-right pipeline diagrams with clean defaults. Define nodes, edges, groups, and optional detail panels in plain Python, then export polished SVG for documentation or high-resolution PNG for slides and papers.
+
+## Theme Gallery
+
+All built-in presets stay on a white canvas. The same hero pipeline is rendered below once per theme so you can compare them directly.
+
+| Retro | Pastel | Dark |
+| --- | --- | --- |
+| ![Retro theme hero](docs/assets/frameplot-hero-retro.png) | ![Pastel theme hero](docs/assets/frameplot-hero-pastel.png) | ![Dark theme hero](docs/assets/frameplot-hero-dark.png) |
+
+| Cyberpunk | Monochrome |
+| --- | --- |
+| ![Cyberpunk theme hero](docs/assets/frameplot-hero-cyberpunk.png) | ![Monochrome theme hero](docs/assets/frameplot-hero-monochrome.png) |
 
 ## Why frameplot?
 
@@ -19,6 +31,7 @@ Turn Python-defined pipeline graphs into presentation-ready SVG and PNG diagrams
 - **Diagram as Code**: Define your pipeline in Python, get deterministic SVG/PNG outputs.
 - **Detail Panels**: Unique feature to expand a summary node into a lower inset mini-graph for deep dives.
 - **Deep Customization**: Fine-tune typography, spacing, colors, and corner radii via `Theme`.
+- **White-Canvas Themes**: Built-in presets stay presentation-friendly on white backgrounds.
 - **Presentation Ready**: High-quality SVG for web/docs and PNG for slides or papers.
 
 ## Install
@@ -74,16 +87,16 @@ Top-level imports are the supported public API:
 
 - `to_svg() -> str`
 - `save_svg(path) -> None`
-- `to_png_bytes() -> bytes`
-- `save_png(path) -> None`
+- `to_png_bytes(scale=4.0) -> bytes`
+- `save_png(path, scale=4.0) -> None`
 
 ## Advanced Example: Multi-cloud Data Pipeline
 
-The hero image at the top is a practical example of a **Multi-cloud Data Pipeline** architecture, generated from [`examples/hero_new.py`](https://github.com/smturtle2/frameplot/blob/main/examples/hero_new.py). It showcases:
+The hero image at the top and the theme gallery above are generated from [`examples/theme_heroes.py`](https://github.com/smturtle2/frameplot/blob/main/examples/theme_heroes.py), using the shared pipeline definition in [`examples/hero_pipeline.py`](https://github.com/smturtle2/frameplot/blob/main/examples/hero_pipeline.py). Together they showcase:
 
 - **Complex Routing**: Seamlessly connecting AWS (S3/Lambda) to GCP (Pub/Sub/Dataflow) services.
 - **Contextual Details**: Using a `DetailPanel` to explain the internal Spark Job Pipeline of the "Dataflow" node.
-- **Dark Mode Styling**: Applying a sophisticated **Slate/Zinc** dark theme for a modern look.
+- **Retro Editorial Styling**: Applying the built-in `Theme.retro()` preset on a white canvas.
 
 ## Design Notes
 
@@ -101,4 +114,4 @@ python -m pip install -e '.[dev]'
 python -m pytest -q
 ```
 
-Release publishing is automated through GitHub Actions and PyPI Trusted Publishing. Bump the version in `pyproject.toml`, create a tag like `v0.3.0`, and push the tag to trigger a release from `.github/workflows/workflow.yml`.
+Release publishing is automated through GitHub Actions and PyPI Trusted Publishing. Bump the version in `pyproject.toml`, create a tag like `v0.4.0`, and push the tag to trigger a release from `.github/workflows/workflow.yml`.

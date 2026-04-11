@@ -8,6 +8,7 @@ from pathlib import Path
 from frameplot.layout import build_layout
 from frameplot.model import DetailPanel, Edge, Group, Node
 from frameplot.render import render_svg, save_png, svg_to_png_bytes
+from frameplot.render.png import DEFAULT_PNG_SCALE
 from frameplot.theme import Theme
 
 __all__ = ["Pipeline"]
@@ -46,16 +47,16 @@ class Pipeline:
 
         Path(path).write_text(self.to_svg(), encoding="utf-8")
 
-    def to_png_bytes(self) -> bytes:
+    def to_png_bytes(self, *, scale: float = DEFAULT_PNG_SCALE) -> bytes:
         """Render the pipeline to PNG bytes with CairoSVG.
 
         Raises:
             RuntimeError: If CairoSVG is not installed in the active environment.
         """
 
-        return svg_to_png_bytes(self.to_svg())
+        return svg_to_png_bytes(self.to_svg(), scale=scale)
 
-    def save_png(self, path: str | Path) -> None:
+    def save_png(self, path: str | Path, *, scale: float = DEFAULT_PNG_SCALE) -> None:
         """Render the pipeline to PNG and write it to `path`."""
 
-        save_png(self.to_svg(), path)
+        save_png(self.to_svg(), path, scale=scale)

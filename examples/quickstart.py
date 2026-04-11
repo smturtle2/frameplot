@@ -1,11 +1,11 @@
-from frameplot import Node, Edge, Group, Pipeline, Theme
+from frameplot import Edge, Group, Node, Pipeline, Theme
 
 pipeline = Pipeline(
     nodes=[
-        Node("start", "Start"),
-        Node("fetch", "Fetch Data"),
-        Node("retry", "Retry", "Wait 5s", fill="#FDEFEF", stroke="#C0504D"),
-        Node("done", "Done"),
+        Node("start", "Start", "Receive request"),
+        Node("fetch", "Fetch Data", "Load source tables"),
+        Node("retry", "Retry", "Loop on transient failure", fill="#FFF2CC"),
+        Node("done", "Done", "Return result", fill="#D9EAD3"),
     ],
     edges=[
         Edge("e1", "start", "fetch"),
@@ -16,7 +16,7 @@ pipeline = Pipeline(
     groups=[
         Group("g1", "Execution", ["start", "fetch", "retry"], edge_ids=["e2"]),
     ],
-    theme=Theme.dark()
+    theme=Theme.pastel()
 )
 
 pipeline.save_svg("docs/assets/quickstart.svg")

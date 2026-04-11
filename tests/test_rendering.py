@@ -12,6 +12,7 @@ from frameplot.layout import build_layout
 from frameplot.layout.route import _build_component_geometry, _route_forward
 from frameplot.layout.types import LayoutNode
 from frameplot.render.png import PNG_SIGNATURE
+from frameplot.render.png import DEFAULT_PNG_SCALE
 from frameplot.theme import resolve_theme_metrics
 
 SVG_NS = {"svg": "http://www.w3.org/2000/svg"}
@@ -45,6 +46,14 @@ def _fmt(value: float) -> str:
 
 def _dasharray(values: tuple[float, float]) -> str:
     return " ".join(_fmt(value) for value in values)
+
+
+def _node_rect_fill(root: ET.Element, node_id: str) -> str:
+    node_group = root.find(f".//svg:g[@id='{node_id}']", SVG_NS)
+    assert node_group is not None
+    rects = node_group.findall("svg:rect", SVG_NS)
+    assert rects
+    return rects[-1].attrib["fill"]
 
 
 def _segment_overlaps(points_a, points_b) -> list[tuple[str, float]]:
@@ -124,6 +133,115 @@ def test_svg_contains_expected_visual_elements() -> None:
     assert 'Execution' in svg
     assert 'fill="#FFF2CC"' in svg
     assert 'rx="16"' in svg or 'rx="16.0"' in svg
+
+
+def test_built_in_themes_render_with_white_canvas_background() -> None:
+    for theme_factory in (Theme.retro, Theme.dark, Theme.cyberpunk, Theme.pastel, Theme.monochrome):
+        pipeline = Pipeline(nodes=[Node("n1", "Node")], edges=[], theme=theme_factory())
+        root = ET.fromstring(pipeline.to_svg())
+        background = root.find("./svg:rect", SVG_NS)
+
+        assert background is not None
+        assert background.attrib["fill"] == "#FFFFFF"
+
+
+def test_theme_registry_exposes_named_theme_factories() -> None:
+    assert tuple(Theme.themes) == ("retro", "dark", "cyberpunk", "pastel", "monochrome")
+
+    first = Theme.themes.retro()
+    second = Theme.themes.retro()
+    indexed = Theme.themes["retro"]()
+
+    assert isinstance(first, Theme)
+    assert isinstance(second, Theme)
+    assert isinstance(indexed, Theme)
+    assert first is not second
+    assert indexed is not first
+
+
+def test_all_built_in_themes_render_group_strokes() -> None:
+    for theme_factory in (Theme.retro, Theme.dark, Theme.cyberpunk, Theme.pastel, Theme.monochrome):
+        assert theme_factory().group_stroke != "none"
+
+
+def test_only_retro_uses_group_accent_line() -> None:
+    assert Theme.retro().show_group_accent_line is True
+
+    for theme_factory in (Theme.dark, Theme.cyberpunk, Theme.pastel, Theme.monochrome):
+        assert theme_factory().show_group_accent_line is False
+
+
+def test_pastel_group_fill_defaults_to_white() -> None:
+    theme = Theme.pastel()
+
+    assert theme.group_fill == "#FFFFFF"
+
+
+def test_node_text_color_auto_switches_between_dark_and_light() -> None:
+    pipeline = Pipeline(
+        nodes=[
+            Node("light", "Light", fill="#F6D36B"),
+            Node("dark", "Dark", fill="#2C4695"),
+        ],
+        edges=[],
+    )
+
+    root = ET.fromstring(pipeline.to_svg())
+    light_group = root.find(".//svg:g[@id='light']", SVG_NS)
+    dark_group = root.find(".//svg:g[@id='dark']", SVG_NS)
+
+    assert light_group is not None
+    assert dark_group is not None
+    assert light_group.findall("svg:text", SVG_NS)[0].attrib["fill"] == "#111111"
+    assert dark_group.findall("svg:text", SVG_NS)[0].attrib["fill"] == "#FFFFFF"
+
+
+def test_builtin_themes_use_automatic_node_palettes() -> None:
+    base_nodes = [Node("first", "First"), Node("second", "Second")]
+    base_edges = [Edge("e1", "first", "second")]
+
+    for theme_factory in (Theme.retro, Theme.dark, Theme.cyberpunk, Theme.pastel, Theme.monochrome):
+        theme = theme_factory()
+        root = ET.fromstring(Pipeline(nodes=base_nodes, edges=base_edges, theme=theme).to_svg())
+
+        assert theme.color_palette is not None
+        assert _node_rect_fill(root, "first") == theme.color_palette[0]
+        assert _node_rect_fill(root, "second") == theme.color_palette[1]
+
+
+def test_dark_cyberpunk_and_monochrome_match_curated_palettes() -> None:
+    assert Theme.dark().color_palette == (
+        "#171A26", "#2C3540", "#425059", "#657371", "#808C8B",
+    )
+    assert Theme.monochrome().color_palette == (
+        "#4A4E59", "#8890A6", "#3C4A73", "#576BA6", "#C8D3F3",
+    )
+    assert Theme.cyberpunk().color_palette == (
+        "#4A79D9", "#B6F2F2", "#F2B56B", "#F27A5E", "#F25E5E",
+    )
+
+
+def test_non_retro_themes_have_distinct_visual_profiles() -> None:
+    dark = Theme.dark()
+    cyberpunk = Theme.cyberpunk()
+    pastel = Theme.pastel()
+    monochrome = Theme.monochrome()
+
+    assert dark.corner_radius == 16.0
+    assert dark.shadow_opacity > 0.0
+    assert "serif" in dark.title_font_family.lower()
+
+    assert cyberpunk.corner_radius == 0.0
+    assert cyberpunk.stroke_width > dark.stroke_width
+    assert "monospace" in cyberpunk.title_font_family.lower()
+
+    assert pastel.corner_radius > dark.corner_radius
+    assert pastel.group_corner_radius > pastel.corner_radius
+    assert pastel.shadow_blur > dark.shadow_blur * 0.5
+
+    assert monochrome.shadow_opacity == 0.0
+    assert monochrome.corner_radius == 8.0
+    assert "monospace" in monochrome.title_font_family.lower()
 
 
 def test_quickstart_forward_group_crossing_bends_outside_group_bounds() -> None:
@@ -341,8 +459,9 @@ def test_save_svg_writes_file(tmp_path) -> None:
 def test_png_export_uses_cairosvg(monkeypatch, tmp_path) -> None:
     captured = {}
 
-    def fake_svg2png(*, bytestring):
+    def fake_svg2png(*, bytestring, scale):
         captured["bytestring"] = bytestring
+        captured["scale"] = scale
         return b"\x89PNG\r\n\x1a\nfake"
 
     monkeypatch.setitem(
@@ -358,6 +477,7 @@ def test_png_export_uses_cairosvg(monkeypatch, tmp_path) -> None:
 
     assert png_bytes.startswith(b"\x89PNG")
     assert captured["bytestring"].startswith(b"<svg")
+    assert captured["scale"] == DEFAULT_PNG_SCALE
     assert output.read_bytes().startswith(b"\x89PNG")
 
 
@@ -365,11 +485,31 @@ def test_png_export_rejects_non_png_payloads(monkeypatch) -> None:
     monkeypatch.setitem(
         __import__("sys").modules,
         "cairosvg",
-        SimpleNamespace(svg2png=lambda *, bytestring: b"not-a-png"),
+        SimpleNamespace(svg2png=lambda *, bytestring, scale: b"not-a-png"),
     )
 
     with pytest.raises(RuntimeError, match="non-PNG"):
         build_sample_pipeline().to_png_bytes()
+
+
+def test_png_export_forwards_custom_scale(monkeypatch) -> None:
+    captured = {}
+
+    def fake_svg2png(*, bytestring, scale):
+        captured["bytestring"] = bytestring
+        captured["scale"] = scale
+        return b"\x89PNG\r\n\x1a\nfake"
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "cairosvg",
+        SimpleNamespace(svg2png=fake_svg2png),
+    )
+
+    build_sample_pipeline().to_png_bytes(scale=3.0)
+
+    assert captured["bytestring"].startswith(b"<svg")
+    assert captured["scale"] == 3.0
 
 
 def test_render_is_deterministic_and_accepts_theme_none() -> None:
@@ -407,7 +547,7 @@ def test_svg_handles_back_edges_and_self_loops() -> None:
 
 
 def test_svg_serializes_resolved_dash_and_marker_metrics() -> None:
-    theme = Theme.presentation()
+    theme = Theme.dark()
     theme.arrow_size = 9.0
     theme.stroke_width = 2.25
     theme.group_stroke_width = 1.75
@@ -451,7 +591,7 @@ def test_compact_rank_gap_tracks_route_track_gap_floor() -> None:
 
 
 def test_text_measurement_and_render_share_resolved_baselines() -> None:
-    theme = Theme.presentation()
+    theme = Theme.dark()
     theme.title_font_size = 20.0
     theme.subtitle_font_size = 11.0
     theme.node_padding_x = 24.0
@@ -822,4 +962,4 @@ def test_sar_backbone_example_main_writes_real_png(tmp_path) -> None:
 def test_checked_in_docs_assets_use_expected_formats() -> None:
     assert Path("docs/assets/quickstart.svg").read_text(encoding="utf-8").startswith("<svg")
     assert Path("docs/assets/quickstart.png").read_bytes().startswith(PNG_SIGNATURE)
-    assert Path("docs/assets/frameplot-hero-new.png").read_bytes().startswith(PNG_SIGNATURE)
+    assert Path("docs/assets/frameplot-hero-retro.png").read_bytes().startswith(PNG_SIGNATURE)

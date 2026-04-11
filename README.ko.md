@@ -17,13 +17,17 @@
 
 모든 내장 프리셋은 흰 캔버스 위에 렌더됩니다. 같은 hero 파이프라인을 각 테마로 한 번씩 렌더해 바로 비교할 수 있게 정리했습니다.
 
-| Soft Retro | Retro | Pastel |
-| --- | --- | --- |
-| ![Soft Retro theme hero](docs/assets/frameplot-hero-soft-retro.png) | ![Retro theme hero](docs/assets/frameplot-hero-retro.png) | ![Pastel theme hero](docs/assets/frameplot-hero-pastel.png) |
+| Soft Retro | Retro |
+| --- | --- |
+| ![Soft Retro theme hero](docs/assets/frameplot-hero-soft-retro.png) | ![Retro theme hero](docs/assets/frameplot-hero-retro.png) |
 
-| Dark | Cyberpunk | Monochrome |
-| --- | --- | --- |
-| ![Dark theme hero](docs/assets/frameplot-hero-dark.png) | ![Cyberpunk theme hero](docs/assets/frameplot-hero-cyberpunk.png) | ![Monochrome theme hero](docs/assets/frameplot-hero-monochrome.png) |
+| Pastel | Dark |
+| --- | --- |
+| ![Pastel theme hero](docs/assets/frameplot-hero-pastel.png) | ![Dark theme hero](docs/assets/frameplot-hero-dark.png) |
+
+| Cyberpunk | Monochrome |
+| --- | --- |
+| ![Cyberpunk theme hero](docs/assets/frameplot-hero-cyberpunk.png) | ![Monochrome theme hero](docs/assets/frameplot-hero-monochrome.png) |
 
 ## 특징
 

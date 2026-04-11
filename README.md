@@ -17,13 +17,17 @@ Turn Python-defined pipeline graphs into presentation-ready SVG and PNG diagrams
 
 All built-in presets stay on a white canvas. The same hero pipeline is rendered below once per theme so you can compare them directly.
 
-| Soft Retro | Retro | Pastel |
-| --- | --- | --- |
-| ![Soft Retro theme hero](docs/assets/frameplot-hero-soft-retro.png) | ![Retro theme hero](docs/assets/frameplot-hero-retro.png) | ![Pastel theme hero](docs/assets/frameplot-hero-pastel.png) |
+| Soft Retro | Retro |
+| --- | --- |
+| ![Soft Retro theme hero](docs/assets/frameplot-hero-soft-retro.png) | ![Retro theme hero](docs/assets/frameplot-hero-retro.png) |
 
-| Dark | Cyberpunk | Monochrome |
-| --- | --- | --- |
-| ![Dark theme hero](docs/assets/frameplot-hero-dark.png) | ![Cyberpunk theme hero](docs/assets/frameplot-hero-cyberpunk.png) | ![Monochrome theme hero](docs/assets/frameplot-hero-monochrome.png) |
+| Pastel | Dark |
+| --- | --- |
+| ![Pastel theme hero](docs/assets/frameplot-hero-pastel.png) | ![Dark theme hero](docs/assets/frameplot-hero-dark.png) |
+
+| Cyberpunk | Monochrome |
+| --- | --- |
+| ![Cyberpunk theme hero](docs/assets/frameplot-hero-cyberpunk.png) | ![Monochrome theme hero](docs/assets/frameplot-hero-monochrome.png) |
 
 ## Why frameplot?
 

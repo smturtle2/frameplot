@@ -2,7 +2,7 @@
 
 def main():
     # 1. 테마 설정 (프리셋 사용으로 대폭 간소화)
-    dark_theme = Theme.presentation()
+    dark_theme = Theme.retro()  # 레트로 스타일 테마 적용 (노드와 엣지 색상 조정 포함)
 
     # 2. 메인 파이프라인 노드
     nodes = [

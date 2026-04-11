@@ -128,13 +128,15 @@ class Theme:
             node_text_color="#111111",
             edge_color="#111111",
             group_stroke="#111111",
-            group_fill="#E8E1CD",
+            group_fill="transparent",
             group_label_color="#111111",
             detail_panel_fill="#FAF8F5",
             detail_panel_stroke="#111111",
+            detail_panel_stroke_width=2.5,
             detail_panel_title_color="#111111",
             detail_panel_guide_color="#D1C8B4",
-            group_fill_opacity=0.6,
+            detail_panel_corner_radius=0.0,
+            group_fill_opacity=0.0,
             stroke_width=2.5,
             corner_radius=0.0,
             group_corner_radius=0.0,
@@ -144,6 +146,112 @@ class Theme:
             color_palette=(
                 "#FF6B6B", "#FCA5A5", "#FDE047", "#86EFAC",
                 "#93C5FD", "#A78BFA", "#F472B6", "#FDBA74"
+            )
+        )
+
+    @classmethod
+    def dark(cls) -> 'Theme':
+        """A modern dark mode theme with slate and zinc tones."""
+        return cls(
+            background_color="#0F172A",  # Slate 900
+            node_fill="#1E293B",  # Slate 800
+            node_stroke="#475569",  # Slate 600
+            node_text_color="#F8FAFC",  # Slate 50
+            edge_color="#94A3B8",  # Slate 400
+            group_stroke="#334155",  # Slate 700
+            group_fill="#0F172A",  # Slate 900
+            group_label_color="#CBD5E1",  # Slate 300
+            detail_panel_fill="#1E293B",
+            detail_panel_stroke="#334155",
+            detail_panel_title_color="#94A3B8",
+            detail_panel_guide_color="#1E293B",
+            group_fill_opacity=0.4,
+            shadow_opacity=0.3,
+            color_palette=(
+                "#F87171", "#FACC15", "#4ADE80", "#2DD4BF",
+                "#60A5FA", "#A78BFA", "#F472B6", "#FB923C"
+            )
+        )
+
+    @classmethod
+    def cyberpunk(cls) -> 'Theme':
+        """A high-contrast neon theme with sharp corners."""
+        return cls(
+            background_color="#050511",
+            node_fill="#000000",
+            node_stroke="#FF00FF",  # Magenta
+            node_text_color="#00FF41",  # Neon Green
+            edge_color="#00FFFF",  # Cyan
+            group_stroke="#00FFFF",
+            group_fill="#110022",
+            group_label_color="#FFFF00",  # Yellow
+            detail_panel_fill="#000000",
+            detail_panel_stroke="#FF00FF",
+            detail_panel_stroke_width=2.0,
+            detail_panel_title_color="#00FF41",
+            detail_panel_guide_color="#220022",
+            detail_panel_corner_radius=0.0,
+            group_fill_opacity=0.6,
+            stroke_width=2.0,
+            corner_radius=0.0,
+            group_corner_radius=0.0,
+            shadow_blur=8.0,
+            shadow_opacity=0.8,
+            shadow_offset_y=0.0,
+            color_palette=(
+                "#FF00FF", "#00FFFF", "#00FF41", "#FFFF00",
+                "#FF003C", "#B026FF", "#04D9FF", "#FF71CE"
+            )
+        )
+
+    @classmethod
+    def pastel(cls) -> 'Theme':
+        """A soft, friendly theme with pastel tones and rounded corners."""
+        return cls(
+            background_color="#FDFBF7",
+            node_fill="#FFFFFF",
+            node_stroke="#FFB3BA",
+            node_text_color="#5D5D5D",
+            edge_color="#BAE1FF",
+            group_stroke="#FFFFBA",
+            group_fill="#FFDFBA",
+            group_label_color="#8B8B8B",
+            detail_panel_fill="#FFFFFF",
+            detail_panel_stroke="#BAE1FF",
+            detail_panel_title_color="#8B8B8B",
+            detail_panel_guide_color="#E8F4FF",
+            group_fill_opacity=0.3,
+            corner_radius=20.0,
+            group_corner_radius=24.0,
+            color_palette=(
+                "#FFB3BA", "#FFDFBA", "#FFFFBA", "#BAFFC9",
+                "#BAE1FF", "#E8BAFF", "#FFB3F7", "#FFC6FF"
+            )
+        )
+
+    @classmethod
+    def monochrome(cls) -> 'Theme':
+        """A grayscale, high-clarity theme perfect for printing."""
+        return cls(
+            background_color="#FFFFFF",
+            node_fill="#FFFFFF",
+            node_stroke="#000000",
+            node_text_color="#000000",
+            edge_color="#000000",
+            group_stroke="#000000",
+            group_fill="#F0F0F0",
+            group_label_color="#000000",
+            detail_panel_fill="#FFFFFF",
+            detail_panel_stroke="#000000",
+            detail_panel_title_color="#000000",
+            detail_panel_guide_color="#E0E0E0",
+            group_fill_opacity=1.0,
+            shadow_blur=0.0,
+            shadow_opacity=0.0,
+            shadow_offset_y=0.0,
+            color_palette=(
+                "#000000", "#333333", "#666666", "#999999",
+                "#CCCCCC", "#E5E5E5", "#111111", "#444444"
             )
         )
 

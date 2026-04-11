@@ -16,7 +16,7 @@ pipeline = Pipeline(
     groups=[
         Group("g1", "Execution", ["start", "fetch", "retry"], edge_ids=["e2"]),
     ],
-    theme=Theme.presentation()
+    theme=Theme.dark()
 )
 
 pipeline.save_svg("docs/assets/quickstart.svg")

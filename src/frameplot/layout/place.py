@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 
 from frameplot.layout.types import LayoutNode, MeasuredText
+from frameplot.theme import resolve_theme_metrics
 
 
 def place_nodes(
@@ -10,6 +11,8 @@ def place_nodes(
     measurements: dict[str, MeasuredText],
     ranks: dict[str, int],
     order: dict[str, int],
+    *,
+    rank_gap_overrides: dict[tuple[int, int], float] | None = None,
 ) -> dict[str, LayoutNode]:
     components = _weak_components(validated)
     placed: dict[str, LayoutNode] = {}
@@ -48,6 +51,8 @@ def place_nodes(
             component_nodes,
             local_ranks,
             min_rank=min_rank,
+            component_id=component_id,
+            overrides=rank_gap_overrides,
         )
 
         row_tops: dict[int, float] = {}
@@ -131,6 +136,17 @@ def _row_gap_after(
     crossing_counts = {row: 0 for row in row_ids[:-1]}
     component_set = set(component_nodes)
 
+    node_padding = {}
+    if hasattr(validated, "groups"):
+        for group in validated.groups:
+            for node_id in group.node_ids:
+                node_padding[node_id] = validated.theme.group_padding
+
+    row_padding: dict[int, float] = {}
+    for row in row_ids:
+        nodes_in_row = [n for n in component_nodes if rows[n] == row]
+        row_padding[row] = max((node_padding.get(n, 0.0) for n in nodes_in_row), default=0.0)
+
     for edge in validated.edges:
         if edge.source not in component_set or edge.target not in component_set:
             continue
@@ -142,11 +158,13 @@ def _row_gap_after(
             crossing_counts[row] = crossing_counts.get(row, 0) + 1
 
     gap_after: dict[int, float] = {}
-    for row in row_ids[:-1]:
+    for i, row in enumerate(row_ids[:-1]):
         lanes = crossing_counts.get(row, 0)
+        padding_add = row_padding[row] + row_padding[row_ids[i+1]]
         gap_after[row] = round(
             _base_row_gap(validated.theme)
-            + max(0, lanes - 1) * validated.theme.route_track_gap,
+            + max(0, lanes - 1) * validated.theme.route_track_gap
+            + padding_add,
             2,
         )
     return gap_after
@@ -158,28 +176,18 @@ def _rank_gap_after(
     ranks: dict[str, int],
     *,
     min_rank: int,
+    component_id: int,
+    overrides: dict[tuple[int, int], float] | None,
 ) -> dict[int, float]:
-    component_set = set(component_nodes)
     normalized_ranks = {node_id: rank - min_rank for node_id, rank in ranks.items()}
     rank_ids = sorted({normalized_ranks[node_id] for node_id in component_nodes})
-    crossing_counts = {rank: 0 for rank in rank_ids[:-1]}
-
-    for edge in validated.edges:
-        if edge.source not in component_set or edge.target not in component_set:
-            continue
-        source_rank = normalized_ranks[edge.source]
-        target_rank = normalized_ranks[edge.target]
-        if source_rank == target_rank:
-            continue
-        for rank in range(min(source_rank, target_rank), max(source_rank, target_rank)):
-            crossing_counts[rank] = crossing_counts.get(rank, 0) + 1
 
     gap_after: dict[int, float] = {}
+    compact_gap = _base_rank_gap(validated.theme)
     for rank in rank_ids[:-1]:
-        lanes = crossing_counts.get(rank, 0)
+        override_key = (component_id, rank + min_rank)
         gap_after[rank] = round(
-            _base_rank_gap(validated.theme)
-            + max(0, lanes - 1) * validated.theme.route_track_gap,
+            max(compact_gap, overrides.get(override_key, compact_gap)) if overrides is not None else compact_gap,
             2,
         )
     return gap_after
@@ -190,4 +198,4 @@ def _base_row_gap(theme: "Theme") -> float:
 
 
 def _base_rank_gap(theme: "Theme") -> float:
-    return max(theme.route_track_gap * 2.5, theme.rank_gap * 0.6)
+    return resolve_theme_metrics(theme).compact_rank_gap

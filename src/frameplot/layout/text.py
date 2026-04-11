@@ -4,18 +4,18 @@ import math
 import textwrap
 
 from frameplot.layout.types import MeasuredText, ValidatedPipeline
-
-
-TITLE_CHAR_WIDTH = 0.58
-SUBTITLE_CHAR_WIDTH = 0.54
-LINE_HEIGHT_RATIO = 1.25
-
+from frameplot.theme import resolve_theme_metrics
 
 def measure_text(validated: ValidatedPipeline) -> dict[str, MeasuredText]:
     theme = validated.theme
-    title_char_limit = max(10, int(theme.max_text_width / (theme.title_font_size * TITLE_CHAR_WIDTH)))
+    metrics = resolve_theme_metrics(theme)
+    title_char_limit = max(
+        10,
+        int(theme.max_text_width / (theme.title_font_size * metrics.title_char_width_ratio)),
+    )
     subtitle_char_limit = max(
-        10, int(theme.max_text_width / (theme.subtitle_font_size * SUBTITLE_CHAR_WIDTH))
+        10,
+        int(theme.max_text_width / (theme.subtitle_font_size * metrics.subtitle_char_width_ratio)),
     )
     measurements: dict[str, MeasuredText] = {}
 
@@ -23,14 +23,20 @@ def measure_text(validated: ValidatedPipeline) -> dict[str, MeasuredText]:
         title_lines = tuple(_wrap(node.title, title_char_limit))
         subtitle_lines = tuple(_wrap(node.subtitle, subtitle_char_limit)) if node.subtitle else ()
 
-        title_width = _max_line_width(title_lines, theme.title_font_size, TITLE_CHAR_WIDTH)
+        title_width = _max_line_width(
+            title_lines,
+            theme.title_font_size,
+            metrics.title_char_width_ratio,
+        )
         subtitle_width = _max_line_width(
-            subtitle_lines, theme.subtitle_font_size, SUBTITLE_CHAR_WIDTH
+            subtitle_lines,
+            theme.subtitle_font_size,
+            metrics.subtitle_char_width_ratio,
         )
         text_width = max(title_width, subtitle_width, theme.min_node_width - theme.node_padding_x * 2)
 
-        title_line_height = theme.title_font_size * LINE_HEIGHT_RATIO
-        subtitle_line_height = theme.subtitle_font_size * LINE_HEIGHT_RATIO
+        title_line_height = theme.title_font_size * metrics.line_height_ratio
+        subtitle_line_height = theme.subtitle_font_size * metrics.line_height_ratio
 
         content_height = len(title_lines) * title_line_height
         if subtitle_lines:

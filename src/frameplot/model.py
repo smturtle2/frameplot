@@ -69,8 +69,9 @@ class Edge:
 class Group:
     """Highlight related nodes or edges with a labeled overlay.
 
-    Groups are visual only. They do not constrain layout or change routing.
-    At least one node or edge reference is required.
+    Groups stay visual first, but routes leaving or re-entering grouped nodes
+    bend outside the grouped area. At least one node or edge reference is
+    required.
     """
 
     id: str

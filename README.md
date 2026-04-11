@@ -89,7 +89,7 @@ The hero image at the top is a practical example of a **Multi-cloud Data Pipelin
 
 - Layout is intentionally left-to-right in v0.x.
 - Edge labels are not supported yet.
-- Groups are visual overlays and do not constrain layout.
+- Groups stay visual overlays, and routes leaving or re-entering grouped nodes bend outside grouped areas.
 - Detail panels render as separate lower insets attached to a focus node in the main flow.
 
 ## Development
@@ -101,4 +101,4 @@ python -m pip install -e '.[dev]'
 python -m pytest -q
 ```
 
-Release publishing is automated through GitHub Actions and PyPI Trusted Publishing. Bump the version in `pyproject.toml`, create a tag like `v0.1.0`, and push the tag to trigger a release from `.github/workflows/workflow.yml`.
+Release publishing is automated through GitHub Actions and PyPI Trusted Publishing. Bump the version in `pyproject.toml`, create a tag like `v0.3.0`, and push the tag to trigger a release from `.github/workflows/workflow.yml`.

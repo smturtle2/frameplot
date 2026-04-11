@@ -89,7 +89,7 @@ pipeline.save_png("pipeline.png")
 
 - v0.x에서는 좌에서 우 레이아웃만 지원합니다.
 - edge label은 아직 지원하지 않습니다.
-- 그룹은 시각적 오버레이이며 레이아웃 제약을 만들지 않습니다.
+- 그룹은 시각적 오버레이이며, grouped node를 드나드는 라우트는 그룹 바깥에서 bend합니다.
 - detail panel은 메인 플로우 아래쪽의 별도 inset 블록으로 렌더링됩니다.
 
 ## 개발
@@ -101,4 +101,4 @@ python -m pip install -e '.[dev]'
 python -m pytest -q
 ```
 
-배포는 GitHub Actions와 PyPI Trusted Publishing으로 자동화합니다. `pyproject.toml`의 버전을 올린 뒤 `v0.1.0` 같은 태그를 푸시하면 `.github/workflows/workflow.yml`에서 릴리스가 시작됩니다.
+배포는 GitHub Actions와 PyPI Trusted Publishing으로 자동화합니다. `pyproject.toml`의 버전을 올린 뒤 `v0.3.0` 같은 태그를 푸시하면 `.github/workflows/workflow.yml`에서 릴리스가 시작됩니다.

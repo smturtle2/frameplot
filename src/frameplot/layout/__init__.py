@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+
 from frameplot.layout.order import order_nodes
 from frameplot.layout.place import place_nodes
 from frameplot.layout.rank import assign_ranks
-from frameplot.layout.route import compute_group_overlays, route_edges
+from frameplot.layout.route import _build_component_geometry, compute_group_overlays, route_edges
 from frameplot.layout.scc import strongly_connected_components
 from frameplot.layout.text import measure_text
 from frameplot.layout.types import (
@@ -20,8 +23,25 @@ from frameplot.layout.types import (
     RoutedEdge,
 )
 from frameplot.layout.validate import validate_pipeline
+from frameplot.theme import resolve_theme_metrics
 
 __all__ = ["build_layout"]
+
+EPSILON = 0.01
+MAX_LAYOUT_STABILIZATION_PASSES = 3
+
+
+@dataclass(slots=True, frozen=True)
+class _GroupSpacingInfo:
+    bounds: Bounds
+    component_id: int
+    group_node_ids: frozenset[str]
+    min_rank: int
+    max_rank: int
+    member_left: float
+    member_right: float
+    left_inside_clearance: float
+    right_inside_clearance: float
 
 
 def build_layout(pipeline: "Pipeline") -> LayoutResult:
@@ -56,10 +76,234 @@ def _layout_graph(validated: "ValidatedPipeline | ValidatedDetailPanel") -> Grap
     scc_result = strongly_connected_components(validated)
     ranks = assign_ranks(validated, scc_result)
     order = order_nodes(validated, ranks)
-    placed_nodes = place_nodes(validated, measurements, ranks, order)
-    routed_edges = route_edges(validated, placed_nodes)
-    overlays = compute_group_overlays(validated, placed_nodes, routed_edges)
+    rank_gap_overrides: dict[tuple[int, int], float] | None = None
+
+    for _ in range(MAX_LAYOUT_STABILIZATION_PASSES):
+        placed_nodes = place_nodes(
+            validated,
+            measurements,
+            ranks,
+            order,
+            rank_gap_overrides=rank_gap_overrides,
+        )
+        routed_edges = route_edges(validated, placed_nodes)
+        overlays = compute_group_overlays(validated, placed_nodes, routed_edges)
+        next_overrides = _rank_gap_overrides(validated, placed_nodes, routed_edges, overlays)
+        if next_overrides == (rank_gap_overrides or {}):
+            break
+        rank_gap_overrides = next_overrides or None
+
     return _normalize_graph_layout(placed_nodes, routed_edges, overlays, validated.theme)
+
+
+def _rank_gap_overrides(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    placed_nodes: dict[str, LayoutNode],
+    routed_edges: tuple[RoutedEdge, ...],
+    overlays: tuple[GroupOverlay, ...],
+) -> dict[tuple[int, int], float]:
+    theme = validated.theme
+    metrics = resolve_theme_metrics(theme)
+    base_gap = metrics.compact_rank_gap
+    geometry_by_component = _build_component_geometry(placed_nodes, theme)
+    required_gaps: dict[tuple[int, int], float] = {}
+    used_lane_positions: dict[tuple[int, int], set[float]] = {}
+
+    for component_id, geometry in geometry_by_component.items():
+        for left_rank in geometry.gap_after_rank:
+            used_lane_positions[(component_id, left_rank)] = set()
+
+    for routed_edge in routed_edges:
+        component_id = placed_nodes[routed_edge.edge.source].component_id
+        geometry = geometry_by_component[component_id]
+        for start, end in zip(routed_edge.points, routed_edge.points[1:]):
+            if start.x != end.x:
+                continue
+            x = round(start.x, 2)
+            for left_rank, (gap_start, gap_end) in geometry.gap_after_rank.items():
+                if gap_start + 0.01 < x < gap_end - 0.01:
+                    used_lane_positions[(component_id, left_rank)].add(x)
+
+    overrides: dict[tuple[int, int], float] = {}
+    for key, lane_positions in used_lane_positions.items():
+        if len(lane_positions) <= 1:
+            continue
+        required_gap = base_gap + max(lane_positions) - min(lane_positions)
+        if required_gap > base_gap + EPSILON:
+            required_gaps[key] = round(required_gap, 2)
+
+    for key, required_gap in _group_boundary_gap_requirements(
+        placed_nodes,
+        overlays,
+        geometry_by_component,
+    ).items():
+        required_gaps[key] = round(max(required_gaps.get(key, 0.0), required_gap), 2)
+
+    for key, required_gap in required_gaps.items():
+        if required_gap > base_gap + EPSILON:
+            overrides[key] = round(required_gap, 2)
+
+    return overrides
+
+
+def _group_boundary_gap_requirements(
+    placed_nodes: dict[str, LayoutNode],
+    overlays: tuple[GroupOverlay, ...],
+    geometry_by_component: dict[int, "ComponentGeometry"],
+) -> dict[tuple[int, int], float]:
+    required_gaps: dict[tuple[int, int], float] = {}
+    group_infos = _build_group_spacing_infos(placed_nodes, overlays)
+
+    for info in group_infos:
+        geometry = geometry_by_component.get(info.component_id)
+        if geometry is None:
+            continue
+
+        right_outside_node = _nearest_outside_node(
+            placed_nodes,
+            bounds=info.bounds,
+            component_id=info.component_id,
+            group_node_ids=info.group_node_ids,
+            rank_predicate=lambda rank: rank > info.max_rank,
+            side="right",
+        )
+        if info.max_rank in geometry.gap_after_rank and right_outside_node is not None:
+            right_boundary_gap = info.right_inside_clearance * 2.0
+            right_neighbor = _nearest_group_neighbor(info, group_infos, side="right")
+            if right_neighbor is not None and right_outside_node.node.id in right_neighbor.group_node_ids:
+                inter_group_gap = max(info.right_inside_clearance, right_neighbor.left_inside_clearance)
+                right_boundary_gap = max(
+                    right_boundary_gap,
+                    info.right_inside_clearance + inter_group_gap + right_neighbor.left_inside_clearance,
+                )
+            required_gaps[(info.component_id, info.max_rank)] = round(
+                max(required_gaps.get((info.component_id, info.max_rank), 0.0), right_boundary_gap),
+                2,
+            )
+
+        left_rank = _previous_rank(geometry, info.min_rank)
+        left_outside_node = _nearest_outside_node(
+            placed_nodes,
+            bounds=info.bounds,
+            component_id=info.component_id,
+            group_node_ids=info.group_node_ids,
+            rank_predicate=lambda rank: rank < info.min_rank,
+            side="left",
+        )
+        if left_rank is not None and left_outside_node is not None:
+            left_boundary_gap = info.left_inside_clearance * 2.0
+            left_neighbor = _nearest_group_neighbor(info, group_infos, side="left")
+            if left_neighbor is not None and left_outside_node.node.id in left_neighbor.group_node_ids:
+                inter_group_gap = max(info.left_inside_clearance, left_neighbor.right_inside_clearance)
+                left_boundary_gap = max(
+                    left_boundary_gap,
+                    info.left_inside_clearance + inter_group_gap + left_neighbor.right_inside_clearance,
+                )
+            required_gaps[(info.component_id, left_rank)] = round(
+                max(required_gaps.get((info.component_id, left_rank), 0.0), left_boundary_gap),
+                2,
+            )
+
+    return required_gaps
+
+
+def _build_group_spacing_infos(
+    placed_nodes: dict[str, LayoutNode],
+    overlays: tuple[GroupOverlay, ...],
+) -> tuple[_GroupSpacingInfo, ...]:
+    infos: list[_GroupSpacingInfo] = []
+
+    for overlay in overlays:
+        if not overlay.group.node_ids:
+            continue
+        member_nodes = [placed_nodes[node_id] for node_id in overlay.group.node_ids]
+        member_left = min(node.x for node in member_nodes)
+        member_right = max(node.right for node in member_nodes)
+        infos.append(
+            _GroupSpacingInfo(
+                bounds=overlay.bounds,
+                component_id=member_nodes[0].component_id,
+                group_node_ids=frozenset(overlay.group.node_ids),
+                min_rank=min(node.rank for node in member_nodes),
+                max_rank=max(node.rank for node in member_nodes),
+                member_left=member_left,
+                member_right=member_right,
+                left_inside_clearance=member_left - overlay.bounds.x,
+                right_inside_clearance=overlay.bounds.right - member_right,
+            )
+        )
+
+    return tuple(infos)
+
+
+def _nearest_outside_node(
+    placed_nodes: dict[str, LayoutNode],
+    *,
+    bounds: Bounds,
+    component_id: int,
+    group_node_ids: frozenset[str],
+    rank_predicate: Callable[[int], bool],
+    side: str,
+) -> LayoutNode | None:
+    candidate: LayoutNode | None = None
+
+    for node_id, node in placed_nodes.items():
+        if node.component_id != component_id:
+            continue
+        if node_id in group_node_ids:
+            continue
+        if not rank_predicate(node.rank):
+            continue
+        if not _bounds_overlap_vertically(bounds, node.bounds):
+            continue
+        if candidate is None:
+            candidate = node
+            continue
+        if side == "right" and node.x < candidate.x:
+            candidate = node
+        if side == "left" and node.right > candidate.right:
+            candidate = node
+
+    return candidate
+
+
+def _nearest_group_neighbor(
+    info: _GroupSpacingInfo,
+    group_infos: tuple[_GroupSpacingInfo, ...],
+    *,
+    side: str,
+) -> _GroupSpacingInfo | None:
+    candidates: list[_GroupSpacingInfo] = []
+
+    for other in group_infos:
+        if other == info:
+            continue
+        if other.component_id != info.component_id:
+            continue
+        if not _bounds_overlap_vertically(info.bounds, other.bounds):
+            continue
+        if side == "right" and other.min_rank > info.max_rank:
+            candidates.append(other)
+        if side == "left" and other.max_rank < info.min_rank:
+            candidates.append(other)
+
+    if not candidates:
+        return None
+
+    if side == "right":
+        return min(candidates, key=lambda other: (other.member_left, other.bounds.x))
+    return max(candidates, key=lambda other: (other.member_right, other.bounds.right))
+
+
+def _bounds_overlap_vertically(first: Bounds, second: Bounds) -> bool:
+    return min(first.bottom, second.bottom) - max(first.y, second.y) > EPSILON
+
+
+def _previous_rank(geometry: "ComponentGeometry", rank: int) -> int | None:
+    candidates = [candidate_rank for candidate_rank in geometry.rank_right if candidate_rank < rank]
+    if not candidates:
+        return None
+    return max(candidates)
 
 
 def _normalize_graph_layout(
@@ -140,12 +384,16 @@ def _build_detail_guides(
     panel_bounds: Bounds,
     theme: "Theme",
 ) -> tuple[GuideLine, ...]:
-    start_left = Point(round(focus_node.x + focus_node.width * 0.2, 2), round(focus_node.bounds.bottom, 2))
-    start_right = Point(
-        round(focus_node.x + focus_node.width * 0.8, 2),
+    metrics = resolve_theme_metrics(theme)
+    start_left = Point(
+        round(focus_node.x + focus_node.width * metrics.guide_anchor_ratio, 2),
         round(focus_node.bounds.bottom, 2),
     )
-    shoulder_inset = min(40.0, panel_bounds.width * 0.18)
+    start_right = Point(
+        round(focus_node.x + focus_node.width * (1.0 - metrics.guide_anchor_ratio), 2),
+        round(focus_node.bounds.bottom, 2),
+    )
+    shoulder_inset = min(metrics.guide_shoulder_inset_cap, panel_bounds.width * metrics.guide_shoulder_inset_ratio)
     end_left = Point(
         round(panel_bounds.x + shoulder_inset, 2),
         round(panel_bounds.y, 2),
@@ -154,9 +402,16 @@ def _build_detail_guides(
         round(panel_bounds.right - shoulder_inset, 2),
         round(panel_bounds.y, 2),
     )
-    flare_x = max(theme.route_track_gap * 1.5, focus_node.width * 0.18)
+    flare_x = max(theme.route_track_gap * metrics.guide_flare_min_factor, focus_node.width * metrics.guide_flare_ratio)
     bend_y = round(
-        start_left.y + max(18.0, min(theme.detail_panel_gap * 0.45, (panel_bounds.y - start_left.y) * 0.45)),
+        start_left.y
+        + max(
+            metrics.guide_min_bend_drop,
+            min(
+                theme.detail_panel_gap * metrics.guide_bend_ratio,
+                (panel_bounds.y - start_left.y) * metrics.guide_bend_ratio,
+            ),
+        ),
         2,
     )
     mid_left = Point(

@@ -4,6 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from frameplot.layout.types import Bounds, GroupOverlay, LayoutNode, Point, RoutedEdge, union_bounds
+from frameplot.theme import resolve_theme_metrics
 
 EPSILON = 0.01
 
@@ -18,6 +19,7 @@ class ComponentGeometry:
     gap_before_rank: dict[int, tuple[float, float]]
     gap_after_row: dict[int, tuple[float, float]]
     gap_before_row: dict[int, tuple[float, float]]
+    outer_left: float
     outer_top: float
     outer_bottom: float
     outer_right: float
@@ -47,11 +49,29 @@ class Occupancy:
     )
 
 
+@dataclass(slots=True, frozen=True)
+class GroupRoutingFrame:
+    bounds: Bounds
+    member_bounds: Bounds
+    header_top: float
+    header_bottom: float
+    top_reserve: float
+
+
+@dataclass(slots=True)
+class RoutingGroups:
+    frames_by_id: dict[str, GroupRoutingFrame]
+    bounds_by_id: dict[str, Bounds]
+    node_group_ids: dict[str, tuple[str, ...]]
+    component_group_ids: dict[int, tuple[str, ...]]
+
+
 def route_edges(
     validated: "ValidatedPipeline | ValidatedDetailPanel",
     nodes: dict[str, LayoutNode],
 ) -> tuple[RoutedEdge, ...]:
-    component_geometry = _build_component_geometry(nodes, validated.theme)
+    routing_groups = _build_routing_groups(validated, nodes)
+    component_geometry = _build_component_geometry(nodes, validated.theme, routing_groups)
     forward_outgoing: dict[str, list["Edge"]] = defaultdict(list)
     forward_incoming: dict[str, list["Edge"]] = defaultdict(list)
 
@@ -85,6 +105,7 @@ def route_edges(
                 occupancy=occupancies[source_node.component_id],
                 base_slot=self_loop_slots[edge.id],
                 pair_offset=pair_offsets.get(edge.id, 0.0),
+                routing_groups=routing_groups,
                 theme=validated.theme,
             )
             _reserve_points(occupancies[source_node.component_id], points, edge.id)
@@ -99,6 +120,7 @@ def route_edges(
                 outgoing_count=len(forward_outgoing[edge.source]),
                 incoming_count=len(forward_incoming[edge.target]),
                 pair_offset=pair_offsets.get(edge.id, 0.0),
+                routing_groups=routing_groups,
                 theme=validated.theme,
             )
             points = candidate.points
@@ -111,6 +133,7 @@ def route_edges(
                 occupancy=occupancies[source_node.component_id],
                 base_slot=back_slots[edge.id],
                 pair_offset=pair_offsets.get(edge.id, 0.0),
+                routing_groups=routing_groups,
                 theme=validated.theme,
             )
             _reserve_points(occupancies[source_node.component_id], points, edge.id)
@@ -125,6 +148,146 @@ def route_edges(
     return tuple(routed_by_id[edge.id] for edge in validated.edges)
 
 
+def _build_routing_groups(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    nodes: dict[str, LayoutNode],
+) -> RoutingGroups:
+    frames_by_id: dict[str, GroupRoutingFrame] = {}
+    bounds_by_id: dict[str, Bounds] = {}
+    node_group_ids: dict[str, list[str]] = defaultdict(list)
+    component_group_ids: dict[int, set[str]] = defaultdict(set)
+
+    for group in validated.groups:
+        if not group.node_ids:
+            continue
+
+        member_bounds = union_bounds([nodes[node_id].bounds for node_id in group.node_ids])
+        top_reserve = _group_internal_back_edge_top_reserve(group, validated, nodes)
+        left_reserve, right_reserve = _group_internal_back_edge_side_reserves(
+            group,
+            validated,
+            nodes,
+            validated.theme,
+            member_bounds,
+        )
+        bounds = _group_clearance_bounds_for_member_bounds(
+            member_bounds,
+            validated.theme,
+            top_reserve=top_reserve,
+            left_reserve=left_reserve,
+            right_reserve=right_reserve,
+        )
+        header_top = round(bounds.y + _group_label_padding(validated.theme), 2)
+        header_bottom = round(member_bounds.y, 2)
+
+        frames_by_id[group.id] = GroupRoutingFrame(
+            bounds=bounds,
+            member_bounds=member_bounds,
+            header_top=header_top,
+            header_bottom=header_bottom,
+            top_reserve=top_reserve,
+        )
+        bounds_by_id[group.id] = bounds
+        for node_id in group.node_ids:
+            node_group_ids[node_id].append(group.id)
+            component_group_ids[nodes[node_id].component_id].add(group.id)
+
+    return RoutingGroups(
+        frames_by_id=frames_by_id,
+        bounds_by_id=bounds_by_id,
+        node_group_ids={node_id: tuple(group_ids) for node_id, group_ids in node_group_ids.items()},
+        component_group_ids={
+            component_id: tuple(sorted(group_ids))
+            for component_id, group_ids in component_group_ids.items()
+        },
+    )
+
+
+def _group_clearance_bounds(
+    group: "Group",
+    nodes: dict[str, LayoutNode],
+    theme: "Theme",
+) -> Bounds:
+    return _group_clearance_bounds_for_member_bounds(
+        union_bounds([nodes[node_id].bounds for node_id in group.node_ids]),
+        theme,
+    )
+
+
+def _group_clearance_bounds_for_member_bounds(
+    member_bounds: Bounds,
+    theme: "Theme",
+    *,
+    top_reserve: float = 0.0,
+    left_reserve: float = 0.0,
+    right_reserve: float = 0.0,
+) -> Bounds:
+    bounds = member_bounds.expand(theme.group_padding)
+    label_padding = _group_label_padding(theme)
+    return Bounds(
+        x=bounds.x - left_reserve,
+        y=bounds.y - label_padding * 0.5 - top_reserve,
+        width=bounds.width + left_reserve + right_reserve,
+        height=bounds.height + label_padding * 0.5 + top_reserve,
+    )
+
+
+def _group_label_padding(theme: "Theme") -> float:
+    return resolve_theme_metrics(theme).group_label_padding
+
+
+def _group_internal_back_edge_top_reserve(
+    group: "Group",
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    nodes: dict[str, LayoutNode],
+) -> float:
+    group_node_ids = set(group.node_ids)
+    has_internal_back_edge = any(
+        edge.source != edge.target
+        and edge.source in group_node_ids
+        and edge.target in group_node_ids
+        and nodes[edge.source].rank >= nodes[edge.target].rank
+        for edge in validated.edges
+    )
+    if not has_internal_back_edge:
+        return 0.0
+    member_heights = [nodes[node_id].height for node_id in group.node_ids]
+    return round(min(member_heights) * 0.5, 2)
+
+
+def _group_internal_back_edge_side_reserves(
+    group: "Group",
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    nodes: dict[str, LayoutNode],
+    theme: "Theme",
+    member_bounds: Bounds,
+) -> tuple[float, float]:
+    group_node_ids = set(group.node_ids)
+    left_reserve = 0.0
+    right_reserve = 0.0
+
+    for edge in validated.edges:
+        if (
+            edge.source == edge.target
+            or edge.source not in group_node_ids
+            or edge.target not in group_node_ids
+            or nodes[edge.source].rank < nodes[edge.target].rank
+        ):
+            continue
+
+        source_node = nodes[edge.source]
+        target_node = nodes[edge.target]
+        desired_right_corridor = source_node.width * 0.35
+        current_right_corridor = theme.group_padding + (member_bounds.right - source_node.right)
+        desired_left_corridor = target_node.width * 0.35
+        current_left_corridor = theme.group_padding + (target_node.x - member_bounds.x)
+
+        right_reserve = max(right_reserve, desired_right_corridor - current_right_corridor)
+        left_reserve = max(left_reserve, desired_left_corridor - current_left_corridor)
+
+    return round(max(left_reserve, 0.0), 2), round(max(right_reserve, 0.0), 2)
+
+
 def compute_group_overlays(
     validated: "ValidatedPipeline | ValidatedDetailPanel",
     nodes: dict[str, LayoutNode],
@@ -134,15 +297,26 @@ def compute_group_overlays(
     overlays: list[GroupOverlay] = []
 
     for group in validated.groups:
+        group_node_set = set(group.node_ids)
         group_bounds = [nodes[node_id].bounds for node_id in group.node_ids]
         group_bounds.extend(edge_lookup[edge_id].bounds for edge_id in group.edge_ids)
-        bounds = union_bounds(group_bounds).expand(validated.theme.group_padding)
-        label_padding = validated.theme.subtitle_font_size + validated.theme.node_padding_y
-        bounds = Bounds(
-            x=bounds.x,
-            y=bounds.y - label_padding * 0.5,
-            width=bounds.width,
-            height=bounds.height + label_padding * 0.5,
+
+        member_bounds = union_bounds([nodes[node_id].bounds for node_id in group.node_ids])
+        top_reserve = _group_internal_back_edge_top_reserve(group, validated, nodes)
+        left_reserve, right_reserve = _group_internal_back_edge_side_reserves(
+            group,
+            validated,
+            nodes,
+            validated.theme,
+            member_bounds,
+        )
+
+        bounds = _group_clearance_bounds_for_member_bounds(
+            union_bounds(group_bounds),
+            validated.theme,
+            top_reserve=top_reserve,
+            left_reserve=left_reserve,
+            right_reserve=right_reserve,
         )
         overlays.append(
             GroupOverlay(
@@ -159,6 +333,7 @@ def compute_group_overlays(
 def _build_component_geometry(
     nodes: dict[str, LayoutNode],
     theme: "Theme",
+    routing_groups: RoutingGroups | None = None,
 ) -> dict[int, ComponentGeometry]:
     by_component: dict[int, list[LayoutNode]] = defaultdict(list)
     for node in nodes.values():
@@ -195,6 +370,30 @@ def _build_component_geometry(
             gap_after_row[upper_row] = gap
             gap_before_row[lower_row] = gap
 
+        related_groups = ()
+        if routing_groups is not None:
+            related_groups = tuple(
+                routing_groups.bounds_by_id[group_id]
+                for group_id in routing_groups.component_group_ids.get(component_id, ())
+            )
+
+        outer_left = min(
+            [min(rank_left.values()) - theme.back_edge_gap * 2]
+            + [group_bounds.x - theme.back_edge_gap * 2 for group_bounds in related_groups]
+        )
+        outer_top = min(
+            [min(row_top.values()) - theme.back_edge_gap]
+            + [group_bounds.y - theme.back_edge_gap for group_bounds in related_groups]
+        )
+        outer_bottom = max(
+            [max(row_bottom.values()) + theme.back_edge_gap]
+            + [group_bounds.bottom + theme.back_edge_gap for group_bounds in related_groups]
+        )
+        outer_right = max(
+            [max(rank_right.values()) + theme.back_edge_gap * 2]
+            + [group_bounds.right + theme.back_edge_gap * 2 for group_bounds in related_groups]
+        )
+
         geometry_by_component[component_id] = ComponentGeometry(
             rank_left=rank_left,
             rank_right=rank_right,
@@ -204,9 +403,10 @@ def _build_component_geometry(
             gap_before_rank=gap_before_rank,
             gap_after_row=gap_after_row,
             gap_before_row=gap_before_row,
-            outer_top=round(min(row_top.values()) - theme.back_edge_gap, 2),
-            outer_bottom=round(max(row_bottom.values()) + theme.back_edge_gap, 2),
-            outer_right=round(max(rank_right.values()) + theme.back_edge_gap * 2, 2),
+            outer_left=round(outer_left, 2),
+            outer_top=round(outer_top, 2),
+            outer_bottom=round(outer_bottom, 2),
+            outer_right=round(outer_right, 2),
         )
 
     return geometry_by_component
@@ -306,6 +506,7 @@ def _select_forward_route(
     outgoing_count: int,
     incoming_count: int,
     pair_offset: float,
+    routing_groups: RoutingGroups | None,
     theme: "Theme",
 ) -> CandidatePath:
     candidates = _build_forward_candidates(
@@ -332,6 +533,14 @@ def _select_forward_route(
             incoming_count=incoming_count,
             theme=theme,
         )
+
+        if not _path_respects_group_clearance(
+            candidate.points,
+            source_node.node.id,
+            target_node.node.id,
+            routing_groups,
+        ):
+            continue
 
         if fallback_score is None or score < fallback_score:
             fallback = candidate
@@ -360,6 +569,7 @@ def _route_forward(
     outgoing_count: int,
     incoming_count: int,
     pair_offset: float,
+    routing_groups: RoutingGroups | None = None,
     theme: "Theme",
 ) -> tuple[Point, ...]:
     return _select_forward_route(
@@ -372,6 +582,7 @@ def _route_forward(
         outgoing_count=outgoing_count,
         incoming_count=incoming_count,
         pair_offset=pair_offset,
+        routing_groups=routing_groups,
         theme=theme,
     ).points
 
@@ -673,15 +884,17 @@ def _lane_positions(start: float, end: float, step: float) -> tuple[float, ...]:
 def _stub_x_after_rank(rank: int, geometry: ComponentGeometry, theme: "Theme") -> float:
     if rank not in geometry.gap_after_rank:
         return round(geometry.rank_right[rank], 2)
+    metrics = resolve_theme_metrics(theme)
     start, end = geometry.gap_after_rank[rank]
-    return round(min(end, start + min(theme.route_track_gap, (end - start) / 2)), 2)
+    return round(min(end, start + min(metrics.short_stub_extent, (end - start) / 2)), 2)
 
 
 def _stub_x_before_rank(rank: int, geometry: ComponentGeometry, theme: "Theme") -> float:
     if rank not in geometry.gap_before_rank:
         return round(geometry.rank_left[rank], 2)
+    metrics = resolve_theme_metrics(theme)
     start, end = geometry.gap_before_rank[rank]
-    return round(max(start, end - min(theme.route_track_gap, (end - start) / 2)), 2)
+    return round(max(start, end - min(metrics.short_stub_extent, (end - start) / 2)), 2)
 
 
 def _right_port(node: LayoutNode, pair_offset: float) -> Point:
@@ -751,6 +964,156 @@ def _candidate_conflicts(candidate: CandidatePath, occupancy: Occupancy) -> bool
         ):
             return True
     return False
+
+
+def _path_respects_group_clearance(
+    points: tuple[Point, ...],
+    source_node_id: str,
+    target_node_id: str,
+    routing_groups: RoutingGroups | None,
+    *,
+    include_shared: bool = False,
+    self_loop: bool = False,
+) -> bool:
+    if routing_groups is None:
+        return True
+
+    relevant_bounds = _relevant_group_bounds(
+        source_node_id,
+        target_node_id,
+        routing_groups,
+        include_shared=include_shared,
+        self_loop=self_loop,
+    )
+    if not relevant_bounds:
+        return True
+
+    for point in _bend_points(points):
+        for bounds in relevant_bounds:
+            if _point_within_bounds(point, bounds):
+                return False
+    return True
+
+
+def _relevant_group_bounds(
+    source_node_id: str,
+    target_node_id: str,
+    routing_groups: RoutingGroups,
+    *,
+    include_shared: bool = False,
+    self_loop: bool = False,
+) -> tuple[Bounds, ...]:
+    source_groups = set(routing_groups.node_group_ids.get(source_node_id, ()))
+    target_groups = set(routing_groups.node_group_ids.get(target_node_id, ()))
+    if self_loop:
+        relevant_group_ids = source_groups
+    elif include_shared:
+        relevant_group_ids = source_groups | target_groups
+    else:
+        relevant_group_ids = source_groups ^ target_groups
+    return tuple(
+        routing_groups.bounds_by_id[group_id]
+        for group_id in sorted(relevant_group_ids)
+        if group_id in routing_groups.bounds_by_id
+    )
+
+
+def _shared_group_frame(
+    source_node_id: str,
+    target_node_id: str,
+    routing_groups: RoutingGroups | None,
+) -> GroupRoutingFrame | None:
+    if routing_groups is None:
+        return None
+
+    source_groups = set(routing_groups.node_group_ids.get(source_node_id, ()))
+    target_groups = set(routing_groups.node_group_ids.get(target_node_id, ()))
+    shared_group_ids = source_groups & target_groups
+
+    candidates = [
+        routing_groups.frames_by_id[group_id]
+        for group_id in shared_group_ids
+        if group_id in routing_groups.frames_by_id
+        and routing_groups.frames_by_id[group_id].header_top < routing_groups.frames_by_id[group_id].header_bottom - EPSILON
+    ]
+    if not candidates:
+        return None
+
+    return min(
+        candidates,
+        key=lambda frame: (
+            frame.bounds.width * frame.bounds.height,
+            frame.bounds.width,
+            frame.bounds.height,
+        ),
+    )
+
+
+def _source_clearance_bounds(
+    source_node_id: str,
+    target_node_id: str,
+    routing_groups: RoutingGroups | None,
+    *,
+    include_shared: bool = False,
+    self_loop: bool = False,
+) -> tuple[Bounds, ...]:
+    if routing_groups is None:
+        return ()
+    source_groups = set(routing_groups.node_group_ids.get(source_node_id, ()))
+    target_groups = set(routing_groups.node_group_ids.get(target_node_id, ()))
+    if self_loop or include_shared:
+        relevant_group_ids = source_groups
+    else:
+        relevant_group_ids = source_groups - target_groups
+    return tuple(
+        routing_groups.bounds_by_id[group_id]
+        for group_id in sorted(relevant_group_ids)
+        if group_id in routing_groups.bounds_by_id
+    )
+
+
+def _target_clearance_bounds(
+    source_node_id: str,
+    target_node_id: str,
+    routing_groups: RoutingGroups | None,
+    *,
+    include_shared: bool = False,
+) -> tuple[Bounds, ...]:
+    if routing_groups is None:
+        return ()
+    source_groups = set(routing_groups.node_group_ids.get(source_node_id, ()))
+    target_groups = set(routing_groups.node_group_ids.get(target_node_id, ()))
+    relevant_group_ids = target_groups if include_shared else target_groups - source_groups
+    return tuple(
+        routing_groups.bounds_by_id[group_id]
+        for group_id in sorted(relevant_group_ids)
+        if group_id in routing_groups.bounds_by_id
+    )
+
+
+def _bend_points(points: tuple[Point, ...]) -> tuple[Point, ...]:
+    bends: list[Point] = []
+    for previous, current, following in zip(points, points[1:], points[2:]):
+        previous_direction = _segment_direction(previous, current)
+        next_direction = _segment_direction(current, following)
+        if previous_direction and next_direction and previous_direction != next_direction:
+            bends.append(current)
+    return tuple(bends)
+
+
+def _segment_direction(start: Point, end: Point) -> str | None:
+    if start.x == end.x and start.y != end.y:
+        return "v"
+    if start.y == end.y and start.x != end.x:
+        return "h"
+    return None
+
+
+def _point_within_bounds(point: Point, bounds: Bounds) -> bool:
+    return (
+        bounds.x - EPSILON <= point.x <= bounds.right + EPSILON
+        and bounds.y - EPSILON <= point.y <= bounds.bottom + EPSILON
+    )
 
 
 def _segment_conflicts(
@@ -846,9 +1209,11 @@ def _select_back_edge_route(
     occupancy: Occupancy,
     base_slot: int,
     pair_offset: float,
+    routing_groups: RoutingGroups | None,
     theme: "Theme",
 ) -> tuple[Point, ...]:
     best_points: tuple[Point, ...] | None = None
+    fallback_points: tuple[Point, ...] | None = None
 
     for slot in range(base_slot, base_slot + 8):
         points = _route_back_edge(
@@ -857,14 +1222,25 @@ def _select_back_edge_route(
             geometry=geometry,
             slot=slot,
             pair_offset=pair_offset,
+            routing_groups=routing_groups,
             theme=theme,
         )
         best_points = points
+        if not _path_respects_group_clearance(
+            points,
+            source_node.node.id,
+            target_node.node.id,
+            routing_groups,
+        ):
+            continue
+        if fallback_points is None:
+            fallback_points = points
         if not _points_conflict(points, occupancy):
             return points
 
-    assert best_points is not None
-    return best_points
+    if fallback_points is not None:
+        return fallback_points
+    raise AssertionError("No group-clear back-edge route found.")
 
 
 def _select_self_loop_route(
@@ -874,9 +1250,11 @@ def _select_self_loop_route(
     occupancy: Occupancy,
     base_slot: int,
     pair_offset: float,
+    routing_groups: RoutingGroups | None,
     theme: "Theme",
 ) -> tuple[Point, ...]:
     best_points: tuple[Point, ...] | None = None
+    fallback_points: tuple[Point, ...] | None = None
 
     for slot in range(base_slot, base_slot + 8):
         points = _route_self_loop(
@@ -884,14 +1262,26 @@ def _select_self_loop_route(
             geometry,
             slot,
             pair_offset,
+            routing_groups,
             theme,
         )
         best_points = points
+        if not _path_respects_group_clearance(
+            points,
+            source_node.node.id,
+            source_node.node.id,
+            routing_groups,
+            self_loop=True,
+        ):
+            continue
+        if fallback_points is None:
+            fallback_points = points
         if not _points_conflict(points, occupancy):
             return points
 
-    assert best_points is not None
-    return best_points
+    if fallback_points is not None:
+        return fallback_points
+    raise AssertionError("No group-clear self-loop route found.")
 
 
 def _route_back_edge(
@@ -901,13 +1291,54 @@ def _route_back_edge(
     geometry: ComponentGeometry,
     slot: int,
     pair_offset: float,
+    routing_groups: RoutingGroups | None,
     theme: "Theme",
 ) -> tuple[Point, ...]:
     source = _right_port(source_node, pair_offset)
     target = _left_port(target_node, pair_offset)
-    lane_y = round(geometry.outer_top - theme.back_edge_gap * slot, 2)
-    exit_x = round(source_node.right + theme.route_track_gap * (slot + 1), 2)
-    entry_x = round(target_node.x - theme.route_track_gap * (slot + 1), 2)
+    shared_frame = _shared_group_frame(
+        source_node.node.id,
+        target_node.node.id,
+        routing_groups,
+    )
+
+    if shared_frame is not None:
+        lane_y = _shared_group_back_edge_lane_y(shared_frame, slot, theme)
+        exit_x = _shared_group_back_edge_exit_x(source_node, shared_frame, geometry, slot)
+        entry_x = _shared_group_back_edge_entry_x(target_node, shared_frame, geometry, slot)
+        return _collapse_points(
+            (
+                source,
+                Point(exit_x, source.y),
+                Point(exit_x, lane_y),
+                Point(entry_x, lane_y),
+                Point(entry_x, target.y),
+                target,
+            )
+        )
+
+    source_clearances = _source_clearance_bounds(
+        source_node.node.id,
+        target_node.node.id,
+        routing_groups,
+    )
+    target_clearances = _target_clearance_bounds(
+        source_node.node.id,
+        target_node.node.id,
+        routing_groups,
+    )
+    top_clearances = _relevant_group_bounds(
+        source_node.node.id,
+        target_node.node.id,
+        routing_groups,
+    )
+    exit_floor = max((bounds.right + theme.route_track_gap for bounds in source_clearances), default=source_node.right)
+    entry_ceiling = min((bounds.x - theme.route_track_gap for bounds in target_clearances), default=target_node.x)
+    top_ceiling = min((bounds.y - theme.route_track_gap for bounds in top_clearances), default=geometry.outer_top)
+
+    lane_y = round(min(geometry.outer_top, top_ceiling) - theme.back_edge_gap * slot, 2)
+    exit_x = round(max(source_node.right + theme.route_track_gap * (slot + 1), exit_floor), 2)
+    entry_x = round(min(target_node.x - theme.route_track_gap * (slot + 1), entry_ceiling), 2)
     return _collapse_points(
         (
             source,
@@ -920,24 +1351,112 @@ def _route_back_edge(
     )
 
 
+def _shared_group_back_edge_lane_y(
+    frame: GroupRoutingFrame,
+    slot: int,
+    theme: "Theme",
+) -> float:
+    band_height = frame.header_bottom - frame.header_top
+    if band_height <= EPSILON:
+        return round(frame.header_top, 2)
+
+    center = frame.header_top + band_height * 0.5
+    offset_step = band_height * 0.18
+    margin = band_height * 0.2
+    lower_bound = frame.header_top + margin
+    upper_bound = frame.header_bottom - margin
+    desired_lane = center - offset_step * slot
+    return round(min(max(desired_lane, lower_bound), upper_bound), 2)
+
+
+def _shared_group_back_edge_exit_x(
+    source_node: LayoutNode,
+    frame: GroupRoutingFrame,
+    geometry: ComponentGeometry,
+    slot: int,
+) -> float:
+    corridor_start = source_node.right
+    corridor_end = frame.bounds.right
+    if source_node.rank in geometry.gap_after_rank:
+        gap_start, gap_end = geometry.gap_after_rank[source_node.rank]
+        corridor_start = max(corridor_start, gap_start)
+        corridor_end = min(corridor_end, gap_end)
+    return _shared_group_stub_x(corridor_start, corridor_end, slot, from_end=False)
+
+
+def _shared_group_back_edge_entry_x(
+    target_node: LayoutNode,
+    frame: GroupRoutingFrame,
+    geometry: ComponentGeometry,
+    slot: int,
+) -> float:
+    corridor_start = frame.bounds.x
+    corridor_end = target_node.x
+    if target_node.rank in geometry.gap_before_rank:
+        gap_start, gap_end = geometry.gap_before_rank[target_node.rank]
+        corridor_start = max(corridor_start, gap_start)
+        corridor_end = min(corridor_end, gap_end)
+    return _shared_group_stub_x(corridor_start, corridor_end, slot, from_end=True)
+
+
+def _shared_group_stub_x(
+    corridor_start: float,
+    corridor_end: float,
+    slot: int,
+    *,
+    from_end: bool,
+) -> float:
+    corridor = max(0.0, corridor_end - corridor_start)
+    base_ratio = min(0.5 + slot * 0.08, 0.66)
+    if from_end:
+        return round(corridor_end - corridor * base_ratio, 2)
+    return round(corridor_start + corridor * base_ratio, 2)
+
+
 def _route_self_loop(
     node: LayoutNode,
     geometry: ComponentGeometry,
     slot: int,
     pair_offset: float,
+    routing_groups: RoutingGroups | None,
     theme: "Theme",
 ) -> tuple[Point, ...]:
     source = _right_port(node, pair_offset)
     target = _left_port(node, pair_offset)
-    loop_x = round(node.right + theme.route_track_gap * (slot + 1), 2)
-    lane_y = round(geometry.outer_top - theme.route_track_gap * (slot + 1), 2)
+    loop_clearances = _source_clearance_bounds(
+        node.node.id,
+        node.node.id,
+        routing_groups,
+        self_loop=True,
+    )
+    loop_x = round(
+        max(
+            node.right + theme.route_track_gap * (slot + 1),
+            max((bounds.right + theme.route_track_gap for bounds in loop_clearances), default=node.right),
+        ),
+        2,
+    )
+    lane_y = round(
+        min(
+            geometry.outer_top - theme.route_track_gap * slot,
+            min((bounds.y - theme.route_track_gap for bounds in loop_clearances), default=geometry.outer_top),
+        ),
+        2,
+    )
+    left_x = round(
+        min(
+            geometry.outer_left - theme.route_track_gap * slot,
+            min((bounds.x - theme.route_track_gap for bounds in loop_clearances), default=geometry.outer_left),
+        ),
+        2,
+    )
     return _collapse_points(
         (
             source,
             Point(loop_x, source.y),
             Point(loop_x, lane_y),
-            Point(node.x - theme.route_track_gap, lane_y),
-            Point(node.x - theme.route_track_gap, target.y),
+            Point(left_x, lane_y),
+            Point(left_x, target.y),
             target,
         )
     )

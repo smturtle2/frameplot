@@ -136,7 +136,7 @@ def test_svg_contains_expected_visual_elements() -> None:
 
 
 def test_built_in_themes_render_with_white_canvas_background() -> None:
-    for theme_factory in (Theme.retro, Theme.dark, Theme.cyberpunk, Theme.pastel, Theme.monochrome):
+    for theme_factory in (Theme.soft_retro, Theme.retro, Theme.pastel, Theme.dark, Theme.cyberpunk, Theme.monochrome):
         pipeline = Pipeline(nodes=[Node("n1", "Node")], edges=[], theme=theme_factory())
         root = ET.fromstring(pipeline.to_svg())
         background = root.find("./svg:rect", SVG_NS)
@@ -146,11 +146,11 @@ def test_built_in_themes_render_with_white_canvas_background() -> None:
 
 
 def test_theme_registry_exposes_named_theme_factories() -> None:
-    assert tuple(Theme.themes) == ("retro", "dark", "cyberpunk", "pastel", "monochrome")
+    assert tuple(Theme.themes) == ("soft_retro", "retro", "pastel", "dark", "cyberpunk", "monochrome")
 
-    first = Theme.themes.retro()
-    second = Theme.themes.retro()
-    indexed = Theme.themes["retro"]()
+    first = Theme.themes.soft_retro()
+    second = Theme.themes.soft_retro()
+    indexed = Theme.themes["soft_retro"]()
 
     assert isinstance(first, Theme)
     assert isinstance(second, Theme)
@@ -160,14 +160,14 @@ def test_theme_registry_exposes_named_theme_factories() -> None:
 
 
 def test_all_built_in_themes_render_group_strokes() -> None:
-    for theme_factory in (Theme.retro, Theme.dark, Theme.cyberpunk, Theme.pastel, Theme.monochrome):
+    for theme_factory in (Theme.soft_retro, Theme.retro, Theme.pastel, Theme.dark, Theme.cyberpunk, Theme.monochrome):
         assert theme_factory().group_stroke != "none"
 
 
 def test_only_retro_uses_group_accent_line() -> None:
     assert Theme.retro().show_group_accent_line is True
 
-    for theme_factory in (Theme.dark, Theme.cyberpunk, Theme.pastel, Theme.monochrome):
+    for theme_factory in (Theme.soft_retro, Theme.pastel, Theme.dark, Theme.cyberpunk, Theme.monochrome):
         assert theme_factory().show_group_accent_line is False
 
 
@@ -200,7 +200,7 @@ def test_builtin_themes_use_automatic_node_palettes() -> None:
     base_nodes = [Node("first", "First"), Node("second", "Second")]
     base_edges = [Edge("e1", "first", "second")]
 
-    for theme_factory in (Theme.retro, Theme.dark, Theme.cyberpunk, Theme.pastel, Theme.monochrome):
+    for theme_factory in (Theme.soft_retro, Theme.retro, Theme.pastel, Theme.dark, Theme.cyberpunk, Theme.monochrome):
         theme = theme_factory()
         root = ET.fromstring(Pipeline(nodes=base_nodes, edges=base_edges, theme=theme).to_svg())
 
@@ -209,7 +209,10 @@ def test_builtin_themes_use_automatic_node_palettes() -> None:
         assert _node_rect_fill(root, "second") == theme.color_palette[1]
 
 
-def test_dark_cyberpunk_and_monochrome_match_curated_palettes() -> None:
+def test_built_in_themes_match_curated_palettes() -> None:
+    assert Theme.soft_retro().color_palette == (
+        "#F6C8B8", "#F8DCA8", "#CFE8C6", "#BFDCEC", "#D8C9F1",
+    )
     assert Theme.dark().color_palette == (
         "#171A26", "#2C3540", "#425059", "#657371", "#808C8B",
     )
@@ -219,6 +222,17 @@ def test_dark_cyberpunk_and_monochrome_match_curated_palettes() -> None:
     assert Theme.cyberpunk().color_palette == (
         "#4A79D9", "#B6F2F2", "#F2B56B", "#F27A5E", "#F25E5E",
     )
+
+
+def test_soft_retro_preserves_retro_geometry_with_monospace_type() -> None:
+    theme = Theme.soft_retro()
+
+    assert theme.corner_radius == 10.0
+    assert theme.group_corner_radius == 12.0
+    assert theme.detail_panel_corner_radius == 10.0
+    assert theme.stroke_width == 2.5
+    assert theme.show_group_accent_line is False
+    assert "monospace" in theme.title_font_family.lower()
 
 
 def test_non_retro_themes_have_distinct_visual_profiles() -> None:
@@ -962,4 +976,4 @@ def test_sar_backbone_example_main_writes_real_png(tmp_path) -> None:
 def test_checked_in_docs_assets_use_expected_formats() -> None:
     assert Path("docs/assets/quickstart.svg").read_text(encoding="utf-8").startswith("<svg")
     assert Path("docs/assets/quickstart.png").read_bytes().startswith(PNG_SIGNATURE)
-    assert Path("docs/assets/frameplot-hero-retro.png").read_bytes().startswith(PNG_SIGNATURE)
+    assert Path("docs/assets/frameplot-hero-soft-retro.png").read_bytes().startswith(PNG_SIGNATURE)

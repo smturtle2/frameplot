@@ -9,7 +9,7 @@ Turn Python-defined pipeline graphs into presentation-ready SVG and PNG diagrams
 
 [한국어 README](https://github.com/smturtle2/frameplot/blob/main/README.ko.md)
 
-![frameplot hero image](docs/assets/frameplot-hero-retro.png)
+![frameplot hero image](docs/assets/frameplot-hero-soft-retro.png)
 
 `frameplot` is a compact Python library for rendering left-to-right pipeline diagrams with clean defaults. Define nodes, edges, groups, and optional detail panels in plain Python, then export polished SVG for documentation or high-resolution PNG for slides and papers.
 
@@ -17,13 +17,13 @@ Turn Python-defined pipeline graphs into presentation-ready SVG and PNG diagrams
 
 All built-in presets stay on a white canvas. The same hero pipeline is rendered below once per theme so you can compare them directly.
 
-| Retro | Pastel | Dark |
+| Soft Retro | Retro | Pastel |
 | --- | --- | --- |
-| ![Retro theme hero](docs/assets/frameplot-hero-retro.png) | ![Pastel theme hero](docs/assets/frameplot-hero-pastel.png) | ![Dark theme hero](docs/assets/frameplot-hero-dark.png) |
+| ![Soft Retro theme hero](docs/assets/frameplot-hero-soft-retro.png) | ![Retro theme hero](docs/assets/frameplot-hero-retro.png) | ![Pastel theme hero](docs/assets/frameplot-hero-pastel.png) |
 
-| Cyberpunk | Monochrome |
-| --- | --- |
-| ![Cyberpunk theme hero](docs/assets/frameplot-hero-cyberpunk.png) | ![Monochrome theme hero](docs/assets/frameplot-hero-monochrome.png) |
+| Dark | Cyberpunk | Monochrome |
+| --- | --- | --- |
+| ![Dark theme hero](docs/assets/frameplot-hero-dark.png) | ![Cyberpunk theme hero](docs/assets/frameplot-hero-cyberpunk.png) | ![Monochrome theme hero](docs/assets/frameplot-hero-monochrome.png) |
 
 ## Why frameplot?
 
@@ -96,7 +96,7 @@ The hero image at the top and the theme gallery above are generated from [`examp
 
 - **Complex Routing**: Seamlessly connecting AWS (S3/Lambda) to GCP (Pub/Sub/Dataflow) services.
 - **Contextual Details**: Using a `DetailPanel` to explain the internal Spark Job Pipeline of the "Dataflow" node.
-- **Retro Editorial Styling**: Applying the built-in `Theme.retro()` preset on a white canvas.
+- **Soft Retro Styling**: Applying the built-in `Theme.soft_retro()` preset on a white canvas.
 
 ## Design Notes
 

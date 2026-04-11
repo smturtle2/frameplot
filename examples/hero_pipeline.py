@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 # Add src to path for direct execution from the repository checkout.
@@ -12,7 +13,23 @@ if __package__ is None or __package__ == "":
 
 from frameplot import DetailPanel, Edge, Group, Node, Pipeline, Theme
 
-THEME_HERO_ORDER = ("retro", "pastel", "dark", "cyberpunk", "monochrome")
+
+@dataclass(slots=True, frozen=True)
+class ThemeHero:
+    key: str
+    label: str
+    slug: str
+
+
+THEME_HEROES = (
+    ThemeHero("soft_retro", "Soft Retro", "soft-retro"),
+    ThemeHero("retro", "Retro", "retro"),
+    ThemeHero("pastel", "Pastel", "pastel"),
+    ThemeHero("dark", "Dark", "dark"),
+    ThemeHero("cyberpunk", "Cyberpunk", "cyberpunk"),
+    ThemeHero("monochrome", "Monochrome", "monochrome"),
+)
+THEME_HERO_ORDER = tuple(hero.key for hero in THEME_HEROES)
 
 
 def build_theme_hero_pipeline(theme: Theme) -> Pipeline:

@@ -9,7 +9,7 @@
 
 [English README](https://github.com/smturtle2/frameplot/blob/main/README.md)
 
-![frameplot hero image](docs/assets/frameplot-hero-retro.png)
+![frameplot hero image](docs/assets/frameplot-hero-soft-retro.png)
 
 `frameplot`은 왼쪽에서 오른쪽으로 흐르는 파이프라인 다이어그램을 깔끔한 기본값으로 렌더링하는 경량 파이썬 라이브러리입니다. 노드, 엣지, 그룹, 그리고 선택적인 detail panel을 파이썬 데이터 구조로 정의한 뒤, 문서용 SVG나 고해상도 발표 자료용 PNG로 바로 내보낼 수 있습니다.
 
@@ -17,13 +17,13 @@
 
 모든 내장 프리셋은 흰 캔버스 위에 렌더됩니다. 같은 hero 파이프라인을 각 테마로 한 번씩 렌더해 바로 비교할 수 있게 정리했습니다.
 
-| Retro | Pastel | Dark |
+| Soft Retro | Retro | Pastel |
 | --- | --- | --- |
-| ![Retro theme hero](docs/assets/frameplot-hero-retro.png) | ![Pastel theme hero](docs/assets/frameplot-hero-pastel.png) | ![Dark theme hero](docs/assets/frameplot-hero-dark.png) |
+| ![Soft Retro theme hero](docs/assets/frameplot-hero-soft-retro.png) | ![Retro theme hero](docs/assets/frameplot-hero-retro.png) | ![Pastel theme hero](docs/assets/frameplot-hero-pastel.png) |
 
-| Cyberpunk | Monochrome |
-| --- | --- |
-| ![Cyberpunk theme hero](docs/assets/frameplot-hero-cyberpunk.png) | ![Monochrome theme hero](docs/assets/frameplot-hero-monochrome.png) |
+| Dark | Cyberpunk | Monochrome |
+| --- | --- | --- |
+| ![Dark theme hero](docs/assets/frameplot-hero-dark.png) | ![Cyberpunk theme hero](docs/assets/frameplot-hero-cyberpunk.png) | ![Monochrome theme hero](docs/assets/frameplot-hero-monochrome.png) |
 
 ## 특징
 
@@ -96,7 +96,7 @@ pipeline.save_png("pipeline.png")
 
 - **클라우드 간 연결**: AWS(S3/Lambda)에서 GCP(Pub/Sub/Dataflow) 서비스로 이어지는 복잡한 흐름 시각화.
 - **컨텍스트 유지**: `DetailPanel`을 사용하여 "Dataflow" 노드 내부의 Spark Job 파이프라인을 메인 흐름을 방해하지 않고 상세 설명.
-- **레트로 에디토리얼 스타일링**: 흰 캔버스 위에 `Theme.retro()` 프리셋을 적용한 대표 예제입니다.
+- **소프트 레트로 스타일링**: 흰 캔버스 위에 `Theme.soft_retro()` 프리셋을 적용한 대표 예제입니다.
 
 ## 참고 사항
 

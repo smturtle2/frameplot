@@ -61,14 +61,15 @@ class ResolvedThemeMetrics:
 
 @dataclass(slots=True, frozen=True)
 class ThemeRegistry:
+    soft_retro: Callable[[], "Theme"]
     retro: Callable[[], "Theme"]
+    pastel: Callable[[], "Theme"]
     dark: Callable[[], "Theme"]
     cyberpunk: Callable[[], "Theme"]
-    pastel: Callable[[], "Theme"]
     monochrome: Callable[[], "Theme"]
 
     def __iter__(self):
-        return iter(("retro", "dark", "cyberpunk", "pastel", "monochrome"))
+        return iter(("soft_retro", "retro", "pastel", "dark", "cyberpunk", "monochrome"))
 
     def __getitem__(self, name: str) -> Callable[[], "Theme"]:
         return getattr(self, name)
@@ -134,6 +135,35 @@ class Theme:
     show_group_accent_line: bool = True
     color_palette: tuple[str, ...] | None = None
     themes: ClassVar[ThemeRegistry]
+
+    @classmethod
+    def soft_retro(cls) -> 'Theme':
+        """A pastel-tinted retro theme with monospace lettering on a white canvas."""
+        theme = cls.retro()
+        theme.background_color = "#FFFFFF"
+        theme.node_fill = "#FAF3E7"
+        theme.node_stroke = "#2E2723"
+        theme.node_text_color = "#2E2723"
+        theme.edge_color = "#2E2723"
+        theme.group_stroke = "#2E2723"
+        theme.group_fill = "#FFF8F2"
+        theme.group_label_color = "#2E2723"
+        theme.title_font_family = "'DejaVu Sans Mono', 'IBM Plex Mono', Menlo, Consolas, monospace"
+        theme.title_font_weight = 650
+        theme.detail_panel_fill = "#FFFDFC"
+        theme.detail_panel_stroke = "#2E2723"
+        theme.detail_panel_title_color = "#2E2723"
+        theme.detail_panel_guide_color = "#D8D0C7"
+        theme.detail_panel_fill_opacity = 0.88
+        theme.corner_radius = 10.0
+        theme.group_corner_radius = 12.0
+        theme.detail_panel_corner_radius = 10.0
+        theme.shadow_opacity = 0.12
+        theme.show_group_accent_line = False
+        theme.color_palette = (
+            "#F6C8B8", "#F8DCA8", "#CFE8C6", "#BFDCEC", "#D8C9F1",
+        )
+        return theme
 
     @classmethod
     def retro(cls) -> 'Theme':
@@ -310,10 +340,11 @@ class Theme:
             ),
         )
 Theme.themes = ThemeRegistry(
+    soft_retro=Theme.soft_retro,
     retro=Theme.retro,
+    pastel=Theme.pastel,
     dark=Theme.dark,
     cyberpunk=Theme.cyberpunk,
-    pastel=Theme.pastel,
     monochrome=Theme.monochrome,
 )
 

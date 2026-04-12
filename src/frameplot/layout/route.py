@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import TypeVar
 
 from frameplot.layout.types import Bounds, GroupOverlay, LayoutNode, Point, RoutedEdge, union_bounds
 from frameplot.theme import resolve_theme_metrics
 
 EPSILON = 0.01
+SelectionItem = TypeVar("SelectionItem")
 
 
 @dataclass(slots=True)
@@ -131,6 +133,35 @@ class InteractionMetrics:
     edge_overlap_length: float = 0.0
     obstacle_overlap_length: float = 0.0
     obstacle_crossings: int = 0
+
+
+@dataclass(slots=True, frozen=True)
+class CandidateEvaluation:
+    clearance_ok: bool
+    shared_local: bool
+    endpoint_preferred: bool
+    clean_direct: bool
+    collisions: int
+    edge_crossings: int
+    edge_overlap_length: float
+    kind_priority: int
+    backwards: float
+    bends: int
+    length: float
+    candidate_index: int
+    candidate: CandidatePath
+
+
+@dataclass(slots=True, frozen=True)
+class PointRouteEvaluation:
+    clearance_ok: bool
+    shared_local: bool
+    edge_crossings: int
+    edge_overlap_length: float
+    bends: int
+    length: float
+    slot: int
+    points: tuple[Point, ...]
 
 
 def _resolved_target(validated: "ValidatedPipeline | ValidatedDetailPanel", edge: "Edge"):
@@ -803,24 +834,12 @@ def _select_forward_route(
         target_node=target_node,
         geometry=geometry,
         pair_offset=pair_offset,
+        routing_groups=routing_groups,
         theme=theme,
     )
-    relevant_groups = _relevant_group_bounds_for_optional_routing_groups(
-        source_node.node.id,
-        target_node.node.id,
-        routing_groups,
-    )
-    evaluations: list[
-        tuple[bool, tuple[int, int, int, int, float, float, int, float, int, float, int], CandidatePath]
-    ] = []
+    evaluations: list[CandidateEvaluation] = []
 
     for candidate_index, (kind, candidate) in enumerate(candidates):
-        clearance_ok = _path_respects_group_clearance(
-            candidate.points,
-            source_node.node.id,
-            target_node.node.id,
-            routing_groups,
-        )
         interactions = _candidate_interaction_metrics(
             candidate,
             occupancy=occupancy,
@@ -828,24 +847,86 @@ def _select_forward_route(
             target_node_id=target_node.node.id,
             routing_groups=routing_groups,
         )
-        priority_key = _forward_priority_key(
-            kind=kind,
-            candidate=candidate,
-            candidate_index=candidate_index,
+        evaluations.append(
+            _build_forward_candidate_evaluation(
+                kind=kind,
+                candidate=candidate,
+                candidate_index=candidate_index,
+                source_node=source_node,
+                target_node=target_node,
+                nodes=nodes,
+                outgoing_count=outgoing_count,
+                incoming_count=incoming_count,
+                theme=theme,
+                interactions=interactions,
+                routing_groups=routing_groups,
+            )
+        )
+
+    selected = _select_candidate_evaluation(evaluations)
+    assert selected is not None
+    return selected.candidate
+
+
+def _build_forward_candidate_evaluation(
+    *,
+    kind: str,
+    candidate: CandidatePath,
+    candidate_index: int,
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    nodes: dict[str, LayoutNode],
+    outgoing_count: int,
+    incoming_count: int,
+    theme: "Theme",
+    interactions: InteractionMetrics,
+    routing_groups: RoutingGroups | None,
+) -> CandidateEvaluation:
+    clearance_ok = _path_respects_group_clearance(
+        candidate.points,
+        source_node.node.id,
+        target_node.node.id,
+        routing_groups,
+    )
+    collisions, backwards, bends, length = _route_metrics(
+        candidate,
+        nodes=nodes,
+        ignored_node_ids={source_node.node.id, target_node.node.id},
+        theme=theme,
+    )
+    return CandidateEvaluation(
+        clearance_ok=clearance_ok,
+        shared_local=_candidate_uses_shared_local(kind),
+        endpoint_preferred=_forward_endpoint_preferred(
+            candidate,
             source_node=source_node,
             target_node=target_node,
-            nodes=nodes,
             outgoing_count=outgoing_count,
             incoming_count=incoming_count,
-            theme=theme,
-            has_relevant_groups=bool(relevant_groups),
+            routing_groups=routing_groups,
+        ),
+        clean_direct=_forward_clean_direct_preferred(
+            kind,
+            candidate,
+            source_node=source_node,
+            target_node=target_node,
+            collisions=collisions,
             interactions=interactions,
-        )
-        evaluations.append((clearance_ok, priority_key, candidate))
-
-    selected = _select_candidate_with_priority(evaluations)
-    assert selected is not None
-    return selected
+        ),
+        collisions=collisions,
+        edge_crossings=interactions.edge_crossings,
+        edge_overlap_length=interactions.edge_overlap_length,
+        kind_priority=_forward_kind_priority(
+            kind=kind,
+            outgoing_count=outgoing_count,
+            incoming_count=incoming_count,
+        ),
+        backwards=backwards,
+        bends=bends,
+        length=length,
+        candidate_index=candidate_index,
+        candidate=candidate,
+    )
 
 
 def _route_forward(
@@ -1051,18 +1132,13 @@ def _select_edge_join_route(
         join_plan=join_plan,
         geometry=geometry,
         pair_offset=pair_offset,
+        routing_groups=routing_groups,
         theme=theme,
     )
     direction = _edge_direction_kind(source_node, target_node)
-    evaluations: list[tuple[bool, tuple[int, int, int, float, float, int, float, int, float, int], CandidatePath]] = []
+    evaluations: list[CandidateEvaluation] = []
 
     for candidate_index, (kind, candidate) in enumerate(candidates):
-        clearance_ok = _path_respects_group_clearance(
-            candidate.points,
-            source_node.node.id,
-            target_node.node.id,
-            routing_groups,
-        )
         interactions = _candidate_interaction_metrics(
             candidate,
             occupancy=occupancy,
@@ -1070,23 +1146,70 @@ def _select_edge_join_route(
             target_node_id=target_node.node.id,
             routing_groups=routing_groups,
         )
-        priority_key = _edge_join_priority_key(
-            kind=kind,
-            candidate=candidate,
-            candidate_index=candidate_index,
-            source_node=source_node,
-            target_node=target_node,
-            nodes=nodes,
-            theme=theme,
-            direction=direction,
-            interactions=interactions,
+        evaluations.append(
+            _build_edge_join_candidate_evaluation(
+                kind=kind,
+                candidate=candidate,
+                candidate_index=candidate_index,
+                source_node=source_node,
+                target_node=target_node,
+                nodes=nodes,
+                theme=theme,
+                direction=direction,
+                interactions=interactions,
+                routing_groups=routing_groups,
+            )
         )
-        evaluations.append((clearance_ok, priority_key, candidate))
 
-    selected = _select_candidate_with_priority(evaluations)
+    selected = _select_candidate_evaluation(evaluations)
     if selected is not None:
-        return selected
+        return selected.candidate
     raise AssertionError(f"No viable join route found for edge {edge.id}.")
+
+
+def _build_edge_join_candidate_evaluation(
+    *,
+    kind: str,
+    candidate: CandidatePath,
+    candidate_index: int,
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    nodes: dict[str, LayoutNode],
+    theme: "Theme",
+    direction: str,
+    interactions: InteractionMetrics,
+    routing_groups: RoutingGroups | None,
+) -> CandidateEvaluation:
+    clearance_ok = _path_respects_group_clearance(
+        candidate.points,
+        source_node.node.id,
+        target_node.node.id,
+        routing_groups,
+    )
+    collisions, backwards, bends, length = _route_metrics(
+        candidate,
+        nodes=nodes,
+        ignored_node_ids={source_node.node.id, target_node.node.id},
+        theme=theme,
+    )
+    return CandidateEvaluation(
+        clearance_ok=clearance_ok,
+        shared_local=_candidate_uses_shared_local(kind),
+        endpoint_preferred=True,
+        clean_direct=False,
+        collisions=collisions,
+        edge_crossings=interactions.edge_crossings,
+        edge_overlap_length=interactions.edge_overlap_length,
+        kind_priority=_edge_join_kind_priority(
+            kind=kind,
+            direction=direction,
+        ),
+        backwards=backwards,
+        bends=bends,
+        length=length,
+        candidate_index=candidate_index,
+        candidate=candidate,
+    )
 
 
 def _build_edge_join_candidates(
@@ -1096,19 +1219,32 @@ def _build_edge_join_candidates(
     join_plan: EdgeJoinPlan,
     geometry: ComponentGeometry,
     pair_offset: float,
+    routing_groups: RoutingGroups | None,
     theme: "Theme",
 ) -> list[tuple[str, CandidatePath]]:
     join_point = join_plan.join_point
     source_right = _right_port(source_node, pair_offset)
+    shared_row_lanes = _shared_group_row_lane_positions(
+        source_node.node.id,
+        target_node.node.id,
+        routing_groups,
+        theme,
+    )
+    shared_column_lanes = _shared_group_column_lane_positions(
+        source_node,
+        target_node,
+        geometry,
+        routing_groups,
+        theme,
+    )
     outer_row_lanes = _outer_row_lane_positions(geometry, theme)
     outer_column_lanes = _outer_column_lane_positions(geometry, theme)
     row_lanes = _unique_lanes(
         _source_row_lane_positions(source_node, target_node, geometry, theme)
         + _target_row_lane_positions(source_node, target_node, geometry, theme)
-        + outer_row_lanes
     )
     column_lanes = _unique_lanes(
-        _join_column_lane_positions(source_node, target_node, geometry, theme) + outer_column_lanes
+        _join_column_lane_positions(source_node, target_node, geometry, theme)
     )
     candidates: dict[tuple[Point, ...], tuple[str, CandidatePath]] = {}
 
@@ -1125,11 +1261,10 @@ def _build_edge_join_candidates(
                 (join_point, "stub"),
             ],
         )
-        for lane_y in row_lanes:
+        for lane_y in shared_row_lanes:
             source_vertical = _vertical_port(source_node, pair_offset, lane_y)
-            kind = "outer_row_join" if lane_y in outer_row_lanes else "row_join"
             add_candidate(
-                kind,
+                "shared_row_join",
                 source_vertical,
                 [
                     (Point(source_vertical.x, lane_y), "stub"),
@@ -1138,7 +1273,7 @@ def _build_edge_join_candidates(
                 ],
             )
             add_candidate(
-                kind,
+                "shared_row_join",
                 source_right,
                 [
                     (Point(source_right.x, lane_y), "reserve"),
@@ -1146,11 +1281,74 @@ def _build_edge_join_candidates(
                     (join_point, "stub"),
                 ],
             )
+        for lane_y in row_lanes:
+            source_vertical = _vertical_port(source_node, pair_offset, lane_y)
+            add_candidate(
+                "row_join",
+                source_vertical,
+                [
+                    (Point(source_vertical.x, lane_y), "stub"),
+                    (Point(join_point.x, lane_y), "reserve"),
+                    (join_point, "stub"),
+                ],
+            )
+            add_candidate(
+                "row_join",
+                source_right,
+                [
+                    (Point(source_right.x, lane_y), "reserve"),
+                    (Point(join_point.x, lane_y), "reserve"),
+                    (join_point, "stub"),
+                ],
+            )
+        for lane_y in outer_row_lanes:
+            source_vertical = _vertical_port(source_node, pair_offset, lane_y)
+            add_candidate(
+                "outer_row_join",
+                source_vertical,
+                [
+                    (Point(source_vertical.x, lane_y), "stub"),
+                    (Point(join_point.x, lane_y), "reserve"),
+                    (join_point, "stub"),
+                ],
+            )
+            add_candidate(
+                "outer_row_join",
+                source_right,
+                [
+                    (Point(source_right.x, lane_y), "reserve"),
+                    (Point(join_point.x, lane_y), "reserve"),
+                    (join_point, "stub"),
+                ],
+            )
+        for lane_x in shared_column_lanes:
+            for lane_y in shared_row_lanes:
+                add_candidate(
+                    "shared_join",
+                    source_right,
+                    [
+                        (Point(lane_x, source_right.y), "reserve"),
+                        (Point(lane_x, lane_y), "reserve"),
+                        (Point(join_point.x, lane_y), "reserve"),
+                        (join_point, "stub"),
+                    ],
+                )
         for lane_x in column_lanes:
             for lane_y in row_lanes:
-                outer_kind = "outer_join" if lane_x in outer_column_lanes or lane_y in outer_row_lanes else "lane_join"
                 add_candidate(
-                    outer_kind,
+                    "lane_join",
+                    source_right,
+                    [
+                        (Point(lane_x, source_right.y), "reserve"),
+                        (Point(lane_x, lane_y), "reserve"),
+                        (Point(join_point.x, lane_y), "reserve"),
+                        (join_point, "stub"),
+                    ],
+                )
+        for lane_x in _unique_lanes(shared_column_lanes + column_lanes + outer_column_lanes):
+            for lane_y in outer_row_lanes:
+                add_candidate(
+                    "outer_join",
                     source_right,
                     [
                         (Point(lane_x, source_right.y), "reserve"),
@@ -1168,10 +1366,9 @@ def _build_edge_join_candidates(
                 (join_point, "stub"),
             ],
         )
-        for lane_x in column_lanes:
-            kind = "outer_column_join" if lane_x in outer_column_lanes else "column_join"
+        for lane_x in shared_column_lanes:
             add_candidate(
-                kind,
+                "shared_column_join",
                 source_right,
                 [
                     (Point(lane_x, source_right.y), "reserve"),
@@ -1179,12 +1376,57 @@ def _build_edge_join_candidates(
                     (join_point, "stub"),
                 ],
             )
+        for lane_x in column_lanes:
+            add_candidate(
+                "column_join",
+                source_right,
+                [
+                    (Point(lane_x, source_right.y), "reserve"),
+                    (Point(lane_x, join_point.y), "reserve"),
+                    (join_point, "stub"),
+                ],
+            )
+        for lane_x in outer_column_lanes:
+            add_candidate(
+                "outer_column_join",
+                source_right,
+                [
+                    (Point(lane_x, source_right.y), "reserve"),
+                    (Point(lane_x, join_point.y), "reserve"),
+                    (join_point, "stub"),
+                ],
+            )
+        for lane_y in shared_row_lanes:
+            source_vertical = _vertical_port(source_node, pair_offset, lane_y)
+            for lane_x in shared_column_lanes:
+                add_candidate(
+                    "shared_join",
+                    source_vertical,
+                    [
+                        (Point(source_vertical.x, lane_y), "stub"),
+                        (Point(lane_x, lane_y), "reserve"),
+                        (Point(lane_x, join_point.y), "reserve"),
+                        (join_point, "stub"),
+                    ],
+                )
         for lane_y in row_lanes:
             source_vertical = _vertical_port(source_node, pair_offset, lane_y)
             for lane_x in column_lanes:
-                outer_kind = "outer_join" if lane_x in outer_column_lanes or lane_y in outer_row_lanes else "lane_join"
                 add_candidate(
-                    outer_kind,
+                    "lane_join",
+                    source_vertical,
+                    [
+                        (Point(source_vertical.x, lane_y), "stub"),
+                        (Point(lane_x, lane_y), "reserve"),
+                        (Point(lane_x, join_point.y), "reserve"),
+                        (join_point, "stub"),
+                    ],
+                )
+        for lane_y in _unique_lanes(shared_row_lanes + row_lanes + outer_row_lanes):
+            source_vertical = _vertical_port(source_node, pair_offset, lane_y)
+            for lane_x in outer_column_lanes:
+                add_candidate(
+                    "outer_join",
                     source_vertical,
                     [
                         (Point(source_vertical.x, lane_y), "stub"),
@@ -1221,14 +1463,25 @@ def _build_forward_candidates(
     target_node: LayoutNode,
     geometry: ComponentGeometry,
     pair_offset: float,
+    routing_groups: RoutingGroups | None,
     theme: "Theme",
 ) -> list[tuple[str, CandidatePath]]:
     candidates: list[tuple[str, CandidatePath]] = []
+    shared_row_lanes = _shared_group_row_lane_positions(
+        source_node.node.id,
+        target_node.node.id,
+        routing_groups,
+        theme,
+    )
 
     if source_node.order == target_node.order:
         candidates.append(("direct", _direct_same_row_candidate(source_node, target_node, geometry, pair_offset, theme)))
     else:
         candidates.append(("direct_elbow", _direct_elbow_candidate(source_node, target_node, pair_offset)))
+
+    for lane_y in shared_row_lanes:
+        candidates.append(("shared_row", _row_source_candidate(source_node, target_node, lane_y, pair_offset)))
+        candidates.append(("shared_row", _row_target_candidate(source_node, target_node, lane_y, pair_offset)))
 
     if source_node.rank in geometry.gap_after_rank:
         for lane_x in _ordered_gap_positions(geometry.gap_after_rank[source_node.rank], theme, "start"):
@@ -1260,7 +1513,11 @@ def _build_forward_candidates(
     for lane_x in _outer_column_lane_positions(geometry, theme):
         candidates.append(("outer_column", _outer_column_candidate(source_node, target_node, lane_x, pair_offset)))
 
-    return candidates
+    unique: dict[tuple[Point, ...], tuple[str, CandidatePath]] = {}
+    for kind, candidate in candidates:
+        unique.setdefault(candidate.points, (kind, candidate))
+
+    return list(unique.values())
 
 
 def _direct_same_row_candidate(
@@ -1476,6 +1733,46 @@ def _target_row_lane_positions(
     return tuple(lanes)
 
 
+def _shared_group_row_lane_positions(
+    source_node_id: str,
+    target_node_id: str,
+    routing_groups: RoutingGroups | None,
+    theme: "Theme",
+) -> tuple[float, ...]:
+    frame = _shared_group_frame(source_node_id, target_node_id, routing_groups)
+    if frame is None:
+        return ()
+
+    lanes = tuple(_shared_group_back_edge_lane_y(frame, slot, theme) for slot in range(3))
+    return _unique_lanes(lanes)
+
+
+def _shared_group_column_lane_positions(
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    geometry: ComponentGeometry,
+    routing_groups: RoutingGroups | None,
+    theme: "Theme",
+) -> tuple[float, ...]:
+    frame = _shared_group_frame(source_node.node.id, target_node.node.id, routing_groups)
+    if frame is None:
+        return ()
+
+    lanes: list[float] = []
+
+    if source_node.rank in geometry.gap_after_rank:
+        clipped_gap = _clip_lane_gap(geometry.gap_after_rank[source_node.rank], frame.bounds.x, frame.bounds.right)
+        if clipped_gap is not None:
+            lanes.extend(_ordered_gap_positions(clipped_gap, theme, "start"))
+
+    if target_node.rank in geometry.gap_before_rank:
+        clipped_gap = _clip_lane_gap(geometry.gap_before_rank[target_node.rank], frame.bounds.x, frame.bounds.right)
+        if clipped_gap is not None:
+            lanes.extend(_ordered_gap_positions(clipped_gap, theme, "end"))
+
+    return _unique_lanes(tuple(lanes))
+
+
 def _outer_row_lane_positions(
     geometry: ComponentGeometry,
     theme: "Theme",
@@ -1514,6 +1811,18 @@ def _ordered_gap_positions(
             ),
         )
     )
+
+
+def _clip_lane_gap(
+    gap: tuple[float, float],
+    lower_bound: float,
+    upper_bound: float,
+) -> tuple[float, float] | None:
+    start = round(max(gap[0], lower_bound), 2)
+    end = round(min(gap[1], upper_bound), 2)
+    if end - start <= EPSILON:
+        return None
+    return (start, end)
 
 
 def _lane_positions(start: float, end: float, step: float) -> tuple[float, ...]:
@@ -1558,32 +1867,129 @@ def _vertical_port(node: LayoutNode, pair_offset: float, lane_y: float) -> Point
     return Point(x, node.y)
 
 
-def _select_candidate_with_priority(
-    evaluations: list[
-        tuple[
-            bool,
-            tuple[int, int, int, int, float, float, int, float, int, float, int],
-            CandidatePath,
-        ]
-    ],
-) -> CandidatePath | None:
-    for clearance_required in (True, False):
-        scoped = [item for item in evaluations if item[0] is clearance_required]
-        if not scoped:
-            continue
-        return min(scoped, key=lambda item: item[1])[2]
-    return None
+def _select_candidate_evaluation(
+    evaluations: list[CandidateEvaluation],
+) -> CandidateEvaluation | None:
+    if not evaluations:
+        return None
+
+    scoped = list(evaluations)
+    scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.clearance_ok)
+    scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.shared_local)
+    scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.clean_direct)
+    scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.endpoint_preferred)
+    scoped = _prefer_zero_int(scoped, key=lambda evaluation: evaluation.collisions)
+    scoped = _prefer_zero_int(scoped, key=lambda evaluation: evaluation.edge_crossings)
+    scoped = _prefer_zero_float(scoped, key=lambda evaluation: evaluation.edge_overlap_length)
+    scoped = _prefer_min_int(scoped, key=lambda evaluation: evaluation.kind_priority)
+    scoped = _prefer_min_float(scoped, key=lambda evaluation: evaluation.backwards)
+    scoped = _prefer_min_int(scoped, key=lambda evaluation: evaluation.bends)
+    scoped = _prefer_min_float(scoped, key=lambda evaluation: evaluation.length)
+    scoped = _prefer_min_int(scoped, key=lambda evaluation: evaluation.candidate_index)
+    return scoped[0]
 
 
-def _select_points_with_priority(
-    evaluations: list[tuple[bool, tuple[int, float, float, int, int], tuple[Point, ...]]],
-) -> tuple[Point, ...] | None:
-    for clearance_required in (True, False):
-        scoped = [item for item in evaluations if item[0] is clearance_required]
-        if not scoped:
-            continue
-        return min(scoped, key=lambda item: item[1])[2]
-    return None
+def _select_point_route_evaluation(
+    evaluations: list[PointRouteEvaluation],
+) -> PointRouteEvaluation | None:
+    if not evaluations:
+        return None
+
+    scoped = list(evaluations)
+    scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.clearance_ok)
+    scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.shared_local)
+    scoped = _prefer_zero_int(scoped, key=lambda evaluation: evaluation.edge_crossings)
+    scoped = _prefer_zero_float(scoped, key=lambda evaluation: evaluation.edge_overlap_length)
+    scoped = _prefer_min_int(scoped, key=lambda evaluation: evaluation.bends)
+    scoped = _prefer_min_float(scoped, key=lambda evaluation: evaluation.length)
+    scoped = _prefer_min_int(scoped, key=lambda evaluation: evaluation.slot)
+    return scoped[0]
+
+
+def _prefer_true(items: list[SelectionItem], *, key) -> list[SelectionItem]:
+    if any(key(item) for item in items):
+        return [item for item in items if key(item)]
+    return items
+
+
+def _prefer_zero_int(items: list[SelectionItem], *, key) -> list[SelectionItem]:
+    zero_items = [item for item in items if key(item) == 0]
+    if zero_items:
+        return zero_items
+    return _prefer_min_int(items, key=key)
+
+
+def _prefer_zero_float(items: list[SelectionItem], *, key) -> list[SelectionItem]:
+    zero_items = [item for item in items if key(item) <= EPSILON]
+    if zero_items:
+        return zero_items
+    return _prefer_min_float(items, key=key)
+
+
+def _prefer_min_int(items: list[SelectionItem], *, key) -> list[SelectionItem]:
+    best = min(key(item) for item in items)
+    return [item for item in items if key(item) == best]
+
+
+def _prefer_min_float(items: list[SelectionItem], *, key) -> list[SelectionItem]:
+    best = min(key(item) for item in items)
+    return [item for item in items if key(item) <= best + EPSILON]
+
+
+def _candidate_uses_shared_local(kind: str) -> bool:
+    return kind.startswith("shared_")
+
+
+def _forward_endpoint_preferred(
+    candidate: CandidatePath,
+    *,
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    outgoing_count: int,
+    incoming_count: int,
+    routing_groups: RoutingGroups | None,
+) -> bool:
+    if _relevant_group_bounds_for_optional_routing_groups(
+        source_node.node.id,
+        target_node.node.id,
+        routing_groups,
+    ):
+        return True
+
+    fanout_context = outgoing_count > 1 and incoming_count <= 1
+    fanin_context = incoming_count > 1 and outgoing_count <= 1
+    preferred = True
+
+    if fanout_context:
+        preferred = preferred and candidate.points[0].x == source_node.right
+    if fanin_context:
+        preferred = preferred and candidate.points[-1].x == target_node.x
+
+    return preferred
+
+
+def _forward_clean_direct_preferred(
+    kind: str,
+    candidate: CandidatePath,
+    *,
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    collisions: int,
+    interactions: InteractionMetrics,
+) -> bool:
+    if kind != "direct_elbow":
+        return False
+    if source_node.order >= target_node.order:
+        return False
+    if collisions != 0:
+        return False
+    if interactions.edge_crossings != 0:
+        return False
+    if interactions.edge_overlap_length > EPSILON:
+        return False
+    if _backwards_distance(candidate.points) > EPSILON:
+        return False
+    return _bend_count(candidate.points) == 1
 
 
 def _route_metrics(
@@ -1694,10 +2100,17 @@ def _obstacle_group_bounds(
     source_node_id: str,
     target_node_id: str,
     routing_groups: RoutingGroups | None,
+    *,
+    self_loop: bool = False,
 ) -> tuple[Bounds, ...]:
     if routing_groups is None:
         return ()
-    return tuple(routing_groups.bounds_by_id[group_id] for group_id in sorted(routing_groups.bounds_by_id))
+    return _relevant_group_bounds(
+        source_node_id,
+        target_node_id,
+        routing_groups,
+        self_loop=self_loop,
+    )
 
 
 def _segment_border_interactions(
@@ -1737,107 +2150,32 @@ def _segment_border_interactions(
     return 0.0, 1
 
 
-def _forward_priority_key(
-    *,
-    kind: str,
-    candidate: CandidatePath,
-    candidate_index: int,
-    source_node: LayoutNode,
-    target_node: LayoutNode,
-    nodes: dict[str, LayoutNode],
-    outgoing_count: int,
-    incoming_count: int,
-    theme: "Theme",
-    has_relevant_groups: bool,
-    interactions: InteractionMetrics,
-) -> tuple[int, int, int, int, float, float, int, float, int, float, int]:
-    collisions, backwards, bends, length = _route_metrics(
-        candidate,
-        nodes=nodes,
-        ignored_node_ids={source_node.node.id, target_node.node.id},
-        theme=theme,
-    )
-    return (
-        interactions.edge_crossings,
-        collisions,
-        _clean_direct_elbow_priority(
-            kind,
-            collisions=collisions,
-            backwards=backwards,
-            bends=bends,
-            has_relevant_groups=has_relevant_groups,
-            interactions=interactions,
-            source_node=source_node,
-            target_node=target_node,
-        ),
-        _forward_side_change_penalty(kind, has_relevant_groups=has_relevant_groups),
-        interactions.edge_overlap_length,
-        interactions.obstacle_overlap_length,
-        interactions.obstacle_crossings,
-        _forward_kind_priority(
-            kind,
-            outgoing_count=outgoing_count,
-            incoming_count=incoming_count,
-            has_relevant_groups=has_relevant_groups,
-        ),
-        backwards,
-        bends,
-        length,
-        candidate_index,
-    )
-
-
-def _clean_direct_elbow_priority(
-    kind: str,
-    *,
-    collisions: int,
-    backwards: float,
-    bends: int,
-    has_relevant_groups: bool,
-    interactions: InteractionMetrics,
-    source_node: LayoutNode,
-    target_node: LayoutNode,
-) -> int:
-    if kind != "direct_elbow" or has_relevant_groups:
-        return 1
-    if source_node.order >= target_node.order:
-        return 1
-    if collisions != 0 or bends != 1 or backwards > EPSILON:
-        return 1
-    if interactions.edge_crossings != 0 or interactions.edge_overlap_length > EPSILON:
-        return 1
-    if interactions.obstacle_overlap_length > EPSILON or interactions.obstacle_crossings != 0:
-        return 1
-    return 0
-
-
 def _forward_kind_priority(
     kind: str,
     *,
     outgoing_count: int,
     incoming_count: int,
-    has_relevant_groups: bool,
 ) -> int:
     fanout_context = outgoing_count > 1 and incoming_count <= 1
     fanin_context = incoming_count > 1 and outgoing_count <= 1
 
     if kind == "direct":
         return 0
-    if kind == "direct_elbow" and has_relevant_groups:
+    if kind == "shared_row":
         return 1
-    if fanout_context and kind == "column_source":
-        return 2
-    if fanout_context and kind == "row_source":
-        return 3
-    if fanin_context and kind == "column_target":
-        return 2
-    if fanin_context and kind == "row_target":
-        return 3
-    if kind in {"column_source", "column_target"}:
-        return 4
-    if kind in {"row_source", "row_target"}:
-        return 5
     if kind == "direct_elbow":
+        return 2
+    if fanout_context and kind == "column_source":
+        return 3
+    if fanout_context and kind == "row_source":
+        return 4
+    if fanin_context and kind == "column_target":
+        return 3
+    if fanin_context and kind == "row_target":
+        return 4
+    if kind in {"column_source", "column_target"}:
+        return 5
+    if kind in {"row_source", "row_target"}:
         return 6
     if kind == "outer_row":
         return 7
@@ -1846,59 +2184,23 @@ def _forward_kind_priority(
     return 9
 
 
-def _forward_side_change_penalty(kind: str, *, has_relevant_groups: bool) -> int:
-    if kind in {"row_source", "row_target", "outer_row"}:
-        return 1
-    if kind == "direct_elbow" and not has_relevant_groups:
-        return 1
-    return 0
-
-
-def _edge_join_priority_key(
-    *,
-    kind: str,
-    candidate: CandidatePath,
-    candidate_index: int,
-    source_node: LayoutNode,
-    target_node: LayoutNode,
-    nodes: dict[str, LayoutNode],
-    theme: "Theme",
-    direction: str,
-    interactions: InteractionMetrics,
-) -> tuple[int, int, int, float, float, int, float, int, float, int]:
-    collisions, backwards, bends, length = _route_metrics(
-        candidate,
-        nodes=nodes,
-        ignored_node_ids={source_node.node.id, target_node.node.id},
-        theme=theme,
-    )
-    return (
-        interactions.edge_crossings,
-        collisions,
-        _edge_join_kind_priority(kind, direction=direction),
-        interactions.edge_overlap_length,
-        interactions.obstacle_overlap_length,
-        interactions.obstacle_crossings,
-        backwards,
-        bends,
-        length,
-        candidate_index,
-    )
-
-
 def _edge_join_kind_priority(kind: str, *, direction: str) -> int:
     if kind == "direct_join":
         return 0
-    if kind in {"row_join", "column_join"}:
+    if kind in {"shared_row_join", "shared_column_join"}:
         return 1
-    if kind == "lane_join":
+    if kind == "shared_join":
         return 2
-    if kind in {"outer_row_join", "outer_column_join"}:
+    if kind in {"row_join", "column_join"}:
         return 3
-    if kind == "outer_join":
+    if kind == "lane_join":
         return 4
+    if kind in {"outer_row_join", "outer_column_join"}:
+        return 5
+    if kind == "outer_join":
+        return 6
     # Keep residual ordering deterministic if new kinds are added later.
-    return 5 if direction == "forward" else 6
+    return 7 if direction == "forward" else 8
 
 
 def _candidate_conflicts(candidate: CandidatePath, occupancy: Occupancy) -> bool:
@@ -2101,33 +2403,26 @@ def _repair_forward_conflicts(
             current_key = (
                 current_interactions.edge_crossings,
                 current_interactions.edge_overlap_length,
-                current_interactions.obstacle_overlap_length,
-                current_interactions.obstacle_crossings,
                 _path_length(route.points),
             )
-            if current_key[:4] == (0, 0.0, 0.0, 0):
+            if current_key[:2] == (0, 0.0):
                 continue
 
             current_source_side = _point_side_on_node(route.points[0], source_node)
             current_target_side = _point_side_on_node(route.points[-1], target_node)
             geometry = component_geometry[source_node.component_id]
-            candidate_evaluations: list[tuple[bool, tuple[int, float, float, int, float], CandidatePath]] = []
+            candidate_evaluations: list[CandidateEvaluation] = []
 
-            for candidate in _same_side_forward_candidates(
+            for kind, candidate in _same_side_forward_candidates(
                 source_node=source_node,
                 target_node=target_node,
                 geometry=geometry,
                 pair_offset=pair_offsets.get(edge.id, 0.0),
                 current_source_side=current_source_side,
                 current_target_side=current_target_side,
+                routing_groups=routing_groups,
                 theme=validated.theme,
             ):
-                clearance_ok = _path_respects_group_clearance(
-                    candidate.points,
-                    source_node.node.id,
-                    target_node.node.id,
-                    routing_groups,
-                )
                 interactions = _candidate_interaction_metrics(
                     candidate,
                     occupancy=occupancy,
@@ -2135,30 +2430,37 @@ def _repair_forward_conflicts(
                     target_node_id=target_node.node.id,
                     routing_groups=routing_groups,
                 )
-                candidate_key = (
-                    interactions.edge_crossings,
-                    interactions.edge_overlap_length,
-                    interactions.obstacle_overlap_length,
-                    interactions.obstacle_crossings,
-                    _path_length(candidate.points),
+                candidate_evaluations.append(
+                    _build_forward_candidate_evaluation(
+                        kind=kind,
+                        candidate=candidate,
+                        candidate_index=len(candidate_evaluations),
+                        source_node=source_node,
+                        target_node=target_node,
+                        nodes=nodes,
+                        outgoing_count=0,
+                        incoming_count=0,
+                        theme=validated.theme,
+                        interactions=interactions,
+                        routing_groups=routing_groups,
+                    )
                 )
-                candidate_evaluations.append((clearance_ok, candidate_key, candidate))
 
-            replacement = _select_repair_candidate(candidate_evaluations)
+            replacement = _select_candidate_evaluation(candidate_evaluations)
             if replacement is None:
                 continue
 
-            replacement_key = next(
-                key
-                for clearance_ok, key, candidate in candidate_evaluations
-                if candidate.points == replacement.points
+            replacement_key = (
+                replacement.edge_crossings,
+                replacement.edge_overlap_length,
+                replacement.length,
             )
             if replacement_key >= current_key:
                 continue
 
-            route.points = replacement.points
+            route.points = replacement.candidate.points
             route.bounds = _bounds_for_points(
-                replacement.points,
+                replacement.candidate.points,
                 validated.theme.stroke_width,
                 validated.theme.arrow_size,
                 badge_radius=route.join_badge_radius,
@@ -2177,38 +2479,29 @@ def _same_side_forward_candidates(
     pair_offset: float,
     current_source_side: str,
     current_target_side: str,
+    routing_groups: RoutingGroups | None,
     theme: "Theme",
-) -> tuple[CandidatePath, ...]:
-    candidates: list[CandidatePath] = []
+) -> tuple[tuple[str, CandidatePath], ...]:
+    candidates: list[tuple[str, CandidatePath]] = []
 
-    for _, candidate in _build_forward_candidates(
+    for kind, candidate in _build_forward_candidates(
         source_node=source_node,
         target_node=target_node,
         geometry=geometry,
         pair_offset=pair_offset,
+        routing_groups=routing_groups,
         theme=theme,
     ):
         if _point_side_on_node(candidate.points[0], source_node) != current_source_side:
             continue
         if _point_side_on_node(candidate.points[-1], target_node) != current_target_side:
             continue
-        candidates.append(candidate)
+        candidates.append((kind, candidate))
 
-    unique: dict[tuple[Point, ...], CandidatePath] = {}
-    for candidate in candidates:
-        unique.setdefault(candidate.points, candidate)
+    unique: dict[tuple[Point, ...], tuple[str, CandidatePath]] = {}
+    for kind, candidate in candidates:
+        unique.setdefault(candidate.points, (kind, candidate))
     return tuple(unique.values())
-
-
-def _select_repair_candidate(
-    evaluations: list[tuple[bool, tuple[int, float, float, int, float], CandidatePath]],
-) -> CandidatePath | None:
-    for clearance_required in (True, False):
-        scoped = [item for item in evaluations if item[0] is clearance_required]
-        if not scoped:
-            continue
-        return min(scoped, key=lambda item: item[1])[2]
-    return None
 
 
 def _separate_overlapping_endpoints(
@@ -2891,7 +3184,8 @@ def _select_back_edge_route(
     routing_groups: RoutingGroups | None,
     theme: "Theme",
 ) -> tuple[Point, ...]:
-    evaluations: list[tuple[bool, tuple[int, float, float, int, int], tuple[Point, ...]]] = []
+    evaluations: list[PointRouteEvaluation] = []
+    shared_local = _shared_group_frame(source_node.node.id, target_node.node.id, routing_groups) is not None
 
     for slot in range(base_slot, base_slot + 8):
         points = _route_back_edge(
@@ -2916,18 +3210,22 @@ def _select_back_edge_route(
             target_node_id=target_node.node.id,
             routing_groups=routing_groups,
         )
-        priority_key = (
-            interactions.edge_crossings,
-            interactions.edge_overlap_length,
-            interactions.obstacle_overlap_length,
-            interactions.obstacle_crossings,
-            slot,
+        evaluations.append(
+            PointRouteEvaluation(
+                clearance_ok=clearance_ok,
+                shared_local=shared_local,
+                edge_crossings=interactions.edge_crossings,
+                edge_overlap_length=interactions.edge_overlap_length,
+                bends=_bend_count(points),
+                length=_path_length(points),
+                slot=slot,
+                points=points,
+            )
         )
-        evaluations.append((clearance_ok, priority_key, points))
 
-    selected = _select_points_with_priority(evaluations)
+    selected = _select_point_route_evaluation(evaluations)
     if selected is not None:
-        return selected
+        return selected.points
     raise AssertionError("No back-edge route found.")
 
 
@@ -2941,7 +3239,8 @@ def _select_self_loop_route(
     routing_groups: RoutingGroups | None,
     theme: "Theme",
 ) -> tuple[Point, ...]:
-    evaluations: list[tuple[bool, tuple[int, float, float, int, int], tuple[Point, ...]]] = []
+    evaluations: list[PointRouteEvaluation] = []
+    shared_local = _shared_group_frame(source_node.node.id, source_node.node.id, routing_groups) is not None
 
     for slot in range(base_slot, base_slot + 8):
         points = _route_self_loop(
@@ -2966,18 +3265,22 @@ def _select_self_loop_route(
             target_node_id=source_node.node.id,
             routing_groups=routing_groups,
         )
-        priority_key = (
-            interactions.edge_crossings,
-            interactions.edge_overlap_length,
-            interactions.obstacle_overlap_length,
-            interactions.obstacle_crossings,
-            slot,
+        evaluations.append(
+            PointRouteEvaluation(
+                clearance_ok=clearance_ok,
+                shared_local=shared_local,
+                edge_crossings=interactions.edge_crossings,
+                edge_overlap_length=interactions.edge_overlap_length,
+                bends=_bend_count(points),
+                length=_path_length(points),
+                slot=slot,
+                points=points,
+            )
         )
-        evaluations.append((clearance_ok, priority_key, points))
 
-    selected = _select_points_with_priority(evaluations)
+    selected = _select_point_route_evaluation(evaluations)
     if selected is not None:
-        return selected
+        return selected.points
 
     raise AssertionError("No self-loop route found.")
 

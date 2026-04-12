@@ -176,6 +176,34 @@ def _build_generate_pipeline_fixture() -> Pipeline:
     )
 
 
+def _build_shared_group_join_fixture() -> Pipeline:
+    theme = Theme.research()
+
+    return Pipeline(
+        nodes=(
+            Node("feature", "Feature", width=220.0),
+            Node("gamma", "γ", fill="#E8F5E9", width=180.0),
+            Node("beta", "β", fill="#E8F5E9", width=180.0),
+            Node("output", "Output", width=180.0),
+            Node("density", "Cloud Density Estimation", fill="#FDECEC", width=220.0),
+        ),
+        edges=(
+            Edge("e_main", "feature", "output"),
+            Edge("e_gamma", "gamma", "e_main", merge_symbol="x"),
+            Edge("e_beta", "beta", "e_main", merge_symbol="+"),
+            Edge("e_density_gamma", "density", "gamma", color="#DD8899", dashed=True),
+            Edge("e_density_beta", "density", "beta", color="#DD8899", dashed=True),
+        ),
+        groups=(
+            Group("g_outer", "Density Modulation", ("feature", "gamma", "beta", "density", "output")),
+            Group("g_adain", "AdaIN", ("feature", "gamma", "beta", "output")),
+            Group("g_scale", "Scale / Shift", ("gamma", "beta")),
+            Group("g_density", "Density", ("density",)),
+        ),
+        theme=theme,
+    )
+
+
 def _make_layout_node(
     node_id: str,
     *,
@@ -921,6 +949,27 @@ def test_generate_pipeline_script_prefers_clean_single_bend_guidance_elbow() -> 
     assert points[0] == Point(guide.right, guide.center_y)
     assert points[1] == Point(target.center_x, guide.center_y)
     assert points[-1] == Point(target.center_x, target.y)
+
+
+def test_shared_group_join_prefers_local_header_lane_over_global_detour() -> None:
+    layout = build_layout(_build_shared_group_join_fixture())
+    routed = {edge.edge.id: edge for edge in layout.main.edges}
+    overlays = {overlay.group.id: overlay.bounds for overlay in layout.main.groups}
+    adain = overlays["g_adain"]
+    outer = overlays["g_outer"]
+    member_top = min(layout.main.nodes[node_id].y for node_id in ("feature", "gamma", "beta", "output"))
+
+    main_lane_y = min(point.y for point in routed["e_main"].points)
+    assert adain.y < main_lane_y < member_top
+    assert outer.y <= main_lane_y
+
+    gamma_join = routed["e_gamma"]
+    beta_join = routed["e_beta"]
+    assert gamma_join.join_point is not None
+    assert beta_join.join_point is not None
+    assert adain.y < gamma_join.join_point.y < member_top
+    assert adain.y < beta_join.join_point.y < member_top
+    assert max(point.x for point in beta_join.points) <= adain.right + 0.01
 
 
 def test_back_edge_leaves_group_before_bending() -> None:

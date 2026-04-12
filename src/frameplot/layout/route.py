@@ -810,7 +810,9 @@ def _select_forward_route(
         target_node.node.id,
         routing_groups,
     )
-    evaluations: list[tuple[bool, tuple[int, int, int, float, float, int, float, int, float, int], CandidatePath]] = []
+    evaluations: list[
+        tuple[bool, tuple[int, int, int, int, float, float, int, float, int, float, int], CandidatePath]
+    ] = []
 
     for candidate_index, (kind, candidate) in enumerate(candidates):
         clearance_ok = _path_respects_group_clearance(
@@ -1560,7 +1562,7 @@ def _select_candidate_with_priority(
     evaluations: list[
         tuple[
             bool,
-            tuple[int, int, int, float, float, int, float, int, float, int],
+            tuple[int, int, int, int, float, float, int, float, int, float, int],
             CandidatePath,
         ]
     ],
@@ -1748,7 +1750,7 @@ def _forward_priority_key(
     theme: "Theme",
     has_relevant_groups: bool,
     interactions: InteractionMetrics,
-) -> tuple[int, int, int, float, float, int, float, int, float, int]:
+) -> tuple[int, int, int, int, float, float, int, float, int, float, int]:
     collisions, backwards, bends, length = _route_metrics(
         candidate,
         nodes=nodes,
@@ -1758,6 +1760,16 @@ def _forward_priority_key(
     return (
         interactions.edge_crossings,
         collisions,
+        _clean_direct_elbow_priority(
+            kind,
+            collisions=collisions,
+            backwards=backwards,
+            bends=bends,
+            has_relevant_groups=has_relevant_groups,
+            interactions=interactions,
+            source_node=source_node,
+            target_node=target_node,
+        ),
         _forward_side_change_penalty(kind, has_relevant_groups=has_relevant_groups),
         interactions.edge_overlap_length,
         interactions.obstacle_overlap_length,
@@ -1773,6 +1785,30 @@ def _forward_priority_key(
         length,
         candidate_index,
     )
+
+
+def _clean_direct_elbow_priority(
+    kind: str,
+    *,
+    collisions: int,
+    backwards: float,
+    bends: int,
+    has_relevant_groups: bool,
+    interactions: InteractionMetrics,
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+) -> int:
+    if kind != "direct_elbow" or has_relevant_groups:
+        return 1
+    if source_node.order >= target_node.order:
+        return 1
+    if collisions != 0 or bends != 1 or backwards > EPSILON:
+        return 1
+    if interactions.edge_crossings != 0 or interactions.edge_overlap_length > EPSILON:
+        return 1
+    if interactions.obstacle_overlap_length > EPSILON or interactions.obstacle_crossings != 0:
+        return 1
+    return 0
 
 
 def _forward_kind_priority(

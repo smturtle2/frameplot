@@ -905,6 +905,24 @@ def test_grouped_forward_edge_can_use_right_side_direct_elbow() -> None:
     assert all(not _point_in_bounds(point, inputs) for point in bends)
 
 
+def test_generate_pipeline_script_prefers_clean_single_bend_guidance_elbow() -> None:
+    namespace = runpy.run_path("test/generate_pipeline.py")
+    pipeline = namespace["build_pipeline"]()
+    layout = build_layout(pipeline)
+    routed = {edge.edge.id: edge for edge in layout.main.edges}
+    guide = layout.main.nodes["h_feature"]
+    target = layout.main.nodes["main_blocks"]
+
+    points = routed["h_to_main"].points
+    bends = _bend_points(points)
+
+    assert len(points) == 3
+    assert bends == [points[1]]
+    assert points[0] == Point(guide.right, guide.center_y)
+    assert points[1] == Point(target.center_x, guide.center_y)
+    assert points[-1] == Point(target.center_x, target.y)
+
+
 def test_back_edge_leaves_group_before_bending() -> None:
     pipeline = Pipeline(
         nodes=[
@@ -1472,23 +1490,31 @@ def test_detail_panel_nested_groups_keep_visible_inner_gap_and_header_clearance(
     assert child.y - parent.y > pipeline.theme.subtitle_font_size * metrics.line_height_ratio
 
 
-def test_detail_panel_shared_guidance_node_stays_above_stream_groups() -> None:
+def test_detail_panel_shared_guidance_node_uses_general_lane_ordering() -> None:
     layout = build_layout(_build_generate_pipeline_fixture())
     panel_nodes = layout.detail_panel.graph.nodes
-    panel_groups = layout.detail_panel.graph.groups
     routed = {edge.edge.id: edge for edge in layout.detail_panel.graph.edges}
     h_node = panel_nodes["panel_h"]
     source_lane_one = _source_access_segment(routed["panel_h_to_nca_c"].points)
     source_lane_two = _source_access_segment(routed["panel_h_to_nca_m"].points)
 
-    assert h_node.order == 0
-    assert panel_nodes["panel_c_in"].order == panel_nodes["panel_nca_c"].order == 1
-    assert panel_nodes["panel_m_in"].order == panel_nodes["panel_nca_m"].order == 2
-    assert all(not _point_in_bounds(Point(h_node.center_x, h_node.center_y), overlay.bounds) for overlay in panel_groups)
-    assert routed["panel_h_to_nca_c"].points[0].x == h_node.right
-    assert routed["panel_h_to_nca_m"].points[0].x == h_node.right
-    assert routed["panel_h_to_nca_c"].points[0].y != routed["panel_h_to_nca_m"].points[0].y
+    assert panel_nodes["panel_c_in"].order == panel_nodes["panel_nca_c"].order == 0
+    assert h_node.order == panel_nodes["panel_nca_m"].order == 1
+    assert panel_nodes["panel_m_in"].order == 2
+    assert h_node.order != 0
     assert _collinear_overlap_length(*source_lane_one, *source_lane_two) == pytest.approx(0.0, abs=0.01)
+
+
+def test_generate_pipeline_script_detail_panel_aligns_guidance_with_candidate_lane() -> None:
+    namespace = runpy.run_path("test/generate_pipeline.py")
+    pipeline = namespace["build_pipeline"]()
+    layout = build_layout(pipeline)
+    panel_nodes = layout.detail_panel.graph.nodes
+    routed = {edge.edge.id: edge for edge in layout.detail_panel.graph.edges}
+
+    assert panel_nodes["panel_h"].order == panel_nodes["panel_local_c"].order == panel_nodes["panel_global_c"].order == 0
+    assert panel_nodes["panel_local_m"].order == panel_nodes["panel_global_m"].order == 1
+    assert routed["panel_h_to_local_c"].points[0].y == routed["panel_h_to_local_c"].points[-1].y
 
 
 def test_generate_pipeline_row_gap_no_longer_scales_with_raw_cross_row_edge_count() -> None:

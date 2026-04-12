@@ -53,6 +53,22 @@ class ResolvedEdgeTarget:
 
 
 @dataclass(slots=True)
+class GroupHierarchy:
+    group_lookup: dict[str, Group]
+    group_index: dict[str, int]
+    structural_group_ids: tuple[str, ...]
+    edge_only_group_ids: tuple[str, ...]
+    top_level_group_ids: tuple[str, ...]
+    top_level_node_ids: tuple[str, ...]
+    group_parent_ids: dict[str, str]
+    group_child_group_ids: dict[str, tuple[str, ...]]
+    group_child_node_ids: dict[str, tuple[str, ...]]
+    group_descendant_node_ids: dict[str, tuple[str, ...]]
+    node_parent_group_ids: dict[str, str]
+    group_depths: dict[str, int]
+
+
+@dataclass(slots=True)
 class ValidatedPipeline:
     nodes: tuple[Node, ...]
     edges: tuple[Edge, ...]
@@ -62,6 +78,7 @@ class ValidatedPipeline:
     edge_targets: dict[str, ResolvedEdgeTarget]
     node_index: dict[str, int]
     edge_index: dict[str, int]
+    group_hierarchy: GroupHierarchy
     theme: Theme
     detail_panel: "ValidatedDetailPanel | None" = None
 
@@ -77,6 +94,7 @@ class ValidatedDetailPanel:
     edge_targets: dict[str, ResolvedEdgeTarget]
     node_index: dict[str, int]
     edge_index: dict[str, int]
+    group_hierarchy: GroupHierarchy
     theme: Theme
 
 

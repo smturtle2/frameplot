@@ -104,7 +104,7 @@ Top-level imports are the supported public API:
 
 - `Node(id, title, subtitle=None, fill=None, stroke=None, text_color=None, metadata=None, width=None, height=None)`
 - `Edge(id, source, target, color=None, dashed=False, merge_symbol=None, metadata=None)`
-- `Group(id, label, node_ids, edge_ids=(), stroke=None, fill=None, metadata=None)`
+- `Group(id, label, node_ids, edge_ids=(), group_ids=(), stroke=None, fill=None, metadata=None)`
 - `DetailPanel(id, focus_node_id, label, nodes, edges, groups=(), stroke=None, fill=None, metadata=None)`
 - `Theme(...)`
 - `Pipeline(nodes, edges, groups=(), detail_panel=None, theme=None)`
@@ -122,7 +122,8 @@ Top-level imports are the supported public API:
 
 - Keep the main graph at one abstraction level. Frameplot lays the pipeline out as a dependency-driven left-to-right graph, not as a freeform block diagram.
 - Use `DetailPanel` for repeated block internals or per-stage mechanics that would otherwise create long-range edges in the main graph.
-- Use `Group` to highlight nearby related nodes, not to force distant nodes to stay together. Groups are visual overlays and routing obstacles, so very wide groups can increase route detours.
+- Use `Group` as a structural container for nearby related nodes. Prefer explicit nesting with `group_ids`; legacy strict-subset node groups are still normalized into a tree for compatibility.
+- Keep group membership tree-shaped. A node can belong to one direct parent group, and a child group can belong to one direct parent group.
 
 ## Advanced Example: Multi-cloud Data Pipeline
 
@@ -136,7 +137,7 @@ The hero image at the top and the theme gallery above are generated from [`examp
 
 - Layout is intentionally left-to-right in v0.x.
 - Edge labels are not supported yet, but edge-to-edge joins can render optional `+` / `x` badges.
-- Groups stay visual overlays, and routes leaving or re-entering grouped nodes bend outside grouped areas.
+- Groups with `node_ids` or `group_ids` are structural container blocks in layout, while edge-only groups remain visual highlights.
 - Detail panels render as separate lower insets attached to a focus node in the main flow.
 - If a sample looks stretched or routes far outside the intended block, the graph usually mixes stage-level flow with internal logic in one plane; move the internals into a `DetailPanel`.
 

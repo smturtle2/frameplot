@@ -104,7 +104,7 @@ pipeline = Pipeline(
 
 - `Node(id, title, subtitle=None, fill=None, stroke=None, text_color=None, metadata=None, width=None, height=None)`
 - `Edge(id, source, target, color=None, dashed=False, merge_symbol=None, metadata=None)`
-- `Group(id, label, node_ids, edge_ids=(), stroke=None, fill=None, metadata=None)`
+- `Group(id, label, node_ids, edge_ids=(), group_ids=(), stroke=None, fill=None, metadata=None)`
 - `DetailPanel(id, focus_node_id, label, nodes, edges, groups=(), stroke=None, fill=None, metadata=None)`
 - `Theme(...)`
 - `Pipeline(nodes, edges, groups=(), detail_panel=None, theme=None)`
@@ -122,7 +122,8 @@ pipeline = Pipeline(
 
 - 메인 그래프는 한 가지 추상화 레벨로 유지하세요. Frameplot은 이를 자유 배치 블록 다이어그램이 아니라 의존 관계 기반의 좌→우 그래프로 배치합니다.
 - 반복 블록 내부나 단계별 내부 메커니즘처럼 메인 그래프에 넣으면 장거리 edge가 생기는 내용은 `DetailPanel`로 분리하세요.
-- `Group`은 서로 가까운 노드를 강조하는 용도이지, 멀리 떨어진 노드를 강제로 붙여 두는 기능이 아닙니다. 그룹은 시각적 오버레이이면서 라우팅 장애물이기 때문에, 너무 넓은 그룹은 우회 경로를 늘릴 수 있습니다.
+- `Group`은 서로 가까운 노드를 담는 structural container 입니다. 중첩은 `group_ids`로 명시하는 편이 좋고, 기존 strict-subset `node_ids` 그룹은 호환을 위해 자동으로 트리로 정규화됩니다.
+- 그룹 membership은 트리 형태로 유지하세요. 하나의 node는 direct parent group 하나만 가질 수 있고, child group도 direct parent group 하나만 가질 수 있습니다.
 
 ## 고급 예제: 멀티 클라우드 데이터 파이프라인
 
@@ -136,7 +137,7 @@ pipeline = Pipeline(
 
 - v0.x에서는 좌에서 우 레이아웃만 지원합니다.
 - edge label은 아직 지원하지 않지만, edge-to-edge 합류 지점에는 선택적으로 `+` / `x` 배지를 그릴 수 있습니다.
-- 그룹은 시각적 오버레이이며, grouped node를 드나드는 라우트는 그룹 바깥에서 bend합니다.
+- `node_ids` 또는 `group_ids`가 있는 그룹은 layout에 참여하는 structural container 이고, edge-only group만 시각적 highlight 로 남습니다.
 - detail panel은 메인 플로우 아래쪽의 별도 inset 블록으로 렌더링됩니다.
 - 샘플이 옆으로 과하게 늘어나거나 라우트가 블록 바깥으로 멀리 우회한다면, 대개 메인 단계 흐름과 내부 로직을 한 평면에 섞어 넣은 경우입니다. 이런 내부 로직은 `DetailPanel`로 빼는 편이 맞습니다.
 

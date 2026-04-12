@@ -188,8 +188,10 @@ def _is_self_loop(validated: "ValidatedPipeline | ValidatedDetailPanel", edge: "
 def route_edges(
     validated: "ValidatedPipeline | ValidatedDetailPanel",
     nodes: dict[str, LayoutNode],
+    *,
+    group_bounds_by_id: dict[str, Bounds] | None = None,
 ) -> tuple[RoutedEdge, ...]:
-    routing_groups = _build_routing_groups(validated, nodes)
+    routing_groups = _build_routing_groups(validated, nodes, group_bounds_by_id=group_bounds_by_id)
     component_geometry = _build_component_geometry(nodes, validated.theme, routing_groups)
     forward_outgoing: dict[str, list["Edge"]] = defaultdict(list)
     forward_incoming: dict[str, list["Edge"]] = defaultdict(list)
@@ -299,7 +301,8 @@ def route_edges(
                 routing_groups=routing_groups,
                 theme=validated.theme,
             )
-            _reserve_candidate(occupancies[source_node.component_id], candidate, edge.id)
+            if edge.merge_symbol is None:
+                _reserve_candidate(occupancies[source_node.component_id], candidate, edge.id)
             badge_radius = _join_badge_radius(validated.theme) if edge.merge_symbol is not None else 0.0
             routed_by_id[edge.id] = RoutedEdge(
                 edge=edge,
@@ -338,12 +341,18 @@ def route_edges(
 def _build_routing_groups(
     validated: "ValidatedPipeline | ValidatedDetailPanel",
     nodes: dict[str, LayoutNode],
+    *,
+    group_bounds_by_id: dict[str, Bounds] | None = None,
 ) -> RoutingGroups:
     frames_by_id: dict[str, GroupRoutingFrame] = {}
     bounds_by_id: dict[str, Bounds] = {}
     node_group_ids: dict[str, list[str]] = defaultdict(list)
     component_group_ids: dict[int, set[str]] = defaultdict(set)
-    prepared_groups = _prepare_group_layouts(validated, nodes)
+    prepared_groups = (
+        _prepare_explicit_group_layouts(validated, nodes, group_bounds_by_id)
+        if group_bounds_by_id is not None and validated.group_hierarchy.structural_group_ids
+        else _prepare_group_layouts(validated, nodes)
+    )
 
     for prepared in prepared_groups:
         group = prepared.group
@@ -355,7 +364,8 @@ def _build_routing_groups(
             top_reserve=prepared.top_reserve,
         )
         bounds_by_id[group.id] = prepared.bounds
-        for node_id in group.node_ids:
+        member_node_ids = validated.group_hierarchy.group_descendant_node_ids.get(group.id, group.node_ids)
+        for node_id in member_node_ids:
             node_group_ids[node_id].append(group.id)
             component_group_ids[nodes[node_id].component_id].add(group.id)
 
@@ -369,6 +379,44 @@ def _build_routing_groups(
         },
         depth_by_id={prepared.group.id: prepared.depth for prepared in prepared_groups},
     )
+
+
+def _prepare_explicit_group_layouts(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    nodes: dict[str, LayoutNode],
+    group_bounds_by_id: dict[str, Bounds],
+) -> tuple[PreparedGroupLayout, ...]:
+    prepared_groups: list[PreparedGroupLayout] = []
+    hierarchy = validated.group_hierarchy
+
+    for group in validated.groups:
+        if group.id not in hierarchy.structural_group_ids or group.id not in group_bounds_by_id:
+            continue
+
+        member_node_ids = hierarchy.group_descendant_node_ids[group.id]
+        member_bounds = union_bounds([nodes[node_id].bounds for node_id in member_node_ids])
+        direct_bounds = [nodes[node_id].bounds for node_id in hierarchy.group_child_node_ids.get(group.id, ())]
+        direct_bounds.extend(
+            group_bounds_by_id[child_group_id]
+            for child_group_id in hierarchy.group_child_group_ids.get(group.id, ())
+            if child_group_id in group_bounds_by_id
+        )
+        content_bounds = union_bounds(direct_bounds) if direct_bounds else member_bounds
+        bounds = group_bounds_by_id[group.id]
+        prepared_groups.append(
+            PreparedGroupLayout(
+                group=group,
+                bounds=bounds,
+                member_bounds=member_bounds,
+                content_bounds=content_bounds,
+                header_top=round(bounds.y + _group_label_padding(validated.theme), 2),
+                header_bottom=round(content_bounds.y, 2),
+                top_reserve=0.0,
+                depth=hierarchy.group_depths.get(group.id, 0),
+            )
+        )
+
+    return tuple(prepared_groups)
 
 
 def _prepare_group_layouts(
@@ -612,20 +660,35 @@ def compute_group_overlays(
     validated: "ValidatedPipeline | ValidatedDetailPanel",
     nodes: dict[str, LayoutNode],
     routed_edges: tuple[RoutedEdge, ...],
+    *,
+    group_bounds_by_id: dict[str, Bounds] | None = None,
 ) -> tuple[GroupOverlay, ...]:
     edge_lookup = {route.edge.id: route for route in routed_edges}
-    overlays = [
-        GroupOverlay(
-            group=prepared.group,
-            bounds=prepared.bounds,
-            stroke=prepared.group.stroke or validated.theme.group_stroke,
-            fill=prepared.group.fill or validated.theme.group_fill,
-        )
-        for prepared in _prepare_group_layouts(validated, nodes, edge_lookup=edge_lookup)
-    ]
+    structural_group_ids = set(validated.group_hierarchy.structural_group_ids)
+    if group_bounds_by_id is not None and structural_group_ids:
+        overlays = [
+            GroupOverlay(
+                group=group,
+                bounds=group_bounds_by_id[group.id],
+                stroke=group.stroke or validated.theme.group_stroke,
+                fill=group.fill or validated.theme.group_fill,
+            )
+            for group in validated.groups
+            if group.id in structural_group_ids and group.id in group_bounds_by_id
+        ]
+    else:
+        overlays = [
+            GroupOverlay(
+                group=prepared.group,
+                bounds=prepared.bounds,
+                stroke=prepared.group.stroke or validated.theme.group_stroke,
+                fill=prepared.group.fill or validated.theme.group_fill,
+            )
+            for prepared in _prepare_group_layouts(validated, nodes, edge_lookup=edge_lookup)
+        ]
 
     for group in validated.groups:
-        if group.node_ids or not group.edge_ids:
+        if group.id in structural_group_ids or not group.edge_ids:
             continue
         edge_bounds = [edge_lookup[edge_id].bounds for edge_id in group.edge_ids if edge_id in edge_lookup]
         if not edge_bounds:
@@ -1533,7 +1596,7 @@ def _direct_same_row_candidate(
     split_x = _stub_x_after_rank(source_node.rank, geometry, theme)
     merge_x = _stub_x_before_rank(target_node.rank, geometry, theme)
 
-    if split_x >= merge_x - EPSILON:
+    if not (source.x < split_x < merge_x < target.x):
         return _build_candidate(
             source,
             [(target, "reserve")],
@@ -1875,13 +1938,13 @@ def _select_candidate_evaluation(
 
     scoped = list(evaluations)
     scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.clearance_ok)
-    scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.shared_local)
     scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.clean_direct)
     scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.endpoint_preferred)
     scoped = _prefer_zero_int(scoped, key=lambda evaluation: evaluation.collisions)
     scoped = _prefer_zero_int(scoped, key=lambda evaluation: evaluation.edge_crossings)
     scoped = _prefer_zero_float(scoped, key=lambda evaluation: evaluation.edge_overlap_length)
     scoped = _prefer_min_int(scoped, key=lambda evaluation: evaluation.kind_priority)
+    scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.shared_local)
     scoped = _prefer_min_float(scoped, key=lambda evaluation: evaluation.backwards)
     scoped = _prefer_min_int(scoped, key=lambda evaluation: evaluation.bends)
     scoped = _prefer_min_float(scoped, key=lambda evaluation: evaluation.length)
@@ -1897,9 +1960,9 @@ def _select_point_route_evaluation(
 
     scoped = list(evaluations)
     scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.clearance_ok)
-    scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.shared_local)
     scoped = _prefer_zero_int(scoped, key=lambda evaluation: evaluation.edge_crossings)
     scoped = _prefer_zero_float(scoped, key=lambda evaluation: evaluation.edge_overlap_length)
+    scoped = _prefer_true(scoped, key=lambda evaluation: evaluation.shared_local)
     scoped = _prefer_min_int(scoped, key=lambda evaluation: evaluation.bends)
     scoped = _prefer_min_float(scoped, key=lambda evaluation: evaluation.length)
     scoped = _prefer_min_int(scoped, key=lambda evaluation: evaluation.slot)
@@ -1977,6 +2040,16 @@ def _forward_clean_direct_preferred(
     collisions: int,
     interactions: InteractionMetrics,
 ) -> bool:
+    if kind == "direct":
+        if collisions != 0:
+            return False
+        if interactions.edge_crossings != 0:
+            return False
+        if interactions.edge_overlap_length > EPSILON:
+            return False
+        if _backwards_distance(candidate.points) > EPSILON:
+            return False
+        return _bend_count(candidate.points) == 0
     if kind != "direct_elbow":
         return False
     if source_node.order >= target_node.order:

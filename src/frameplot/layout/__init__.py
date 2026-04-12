@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import SimpleNamespace
 
+from frameplot.model import Edge, Node
 from frameplot.layout.order import order_nodes
 from frameplot.layout.place import place_nodes
 from frameplot.layout.rank import assign_ranks
@@ -19,7 +23,9 @@ from frameplot.layout.types import (
     GuideLine,
     LayoutNode,
     LayoutResult,
+    MeasuredText,
     Point,
+    ResolvedEdgeTarget,
     RoutedEdge,
 )
 from frameplot.layout.validate import validate_pipeline
@@ -48,6 +54,30 @@ class _GroupSpacingInfo:
     bottom_inside_clearance: float
     left_inside_clearance: float
     right_inside_clearance: float
+
+
+@dataclass(slots=True, frozen=True)
+class _ContainerPlacement:
+    leaf_nodes: dict[str, LayoutNode]
+    group_bounds: dict[str, Bounds]
+    bounds: Bounds
+    rank_span: int
+    order_span: int
+
+
+@dataclass(slots=True)
+class _TempValidatedGraph:
+    nodes: tuple[Node, ...]
+    edges: tuple[Edge, ...]
+    groups: tuple[object, ...]
+    node_lookup: dict[str, Node]
+    edge_lookup: dict[str, Edge]
+    edge_targets: dict[str, ResolvedEdgeTarget]
+    node_index: dict[str, int]
+    edge_index: dict[str, int]
+    group_hierarchy: object
+    theme: "Theme"
+    detail_panel: None = None
 
 
 def build_layout(pipeline: "Pipeline") -> LayoutResult:
@@ -79,6 +109,17 @@ def build_layout(pipeline: "Pipeline") -> LayoutResult:
 
 def _layout_graph(validated: "ValidatedPipeline | ValidatedDetailPanel") -> GraphLayout:
     measurements = measure_text(validated)
+    if validated.group_hierarchy.structural_group_ids:
+        return _layout_structural_graph(validated, measurements)
+    return _layout_flat_graph(validated, measurements)
+
+
+def _layout_flat_graph(
+    validated: "ValidatedPipeline | ValidatedDetailPanel | _TempValidatedGraph",
+    measurements: dict[str, MeasuredText],
+    *,
+    group_bounds_by_id: dict[str, Bounds] | None = None,
+) -> GraphLayout:
     scc_result = strongly_connected_components(validated)
     ranks = assign_ranks(validated, scc_result)
     order = order_nodes(validated, ranks)
@@ -96,8 +137,13 @@ def _layout_graph(validated: "ValidatedPipeline | ValidatedDetailPanel") -> Grap
             row_gap_overrides=row_gap_overrides,
             row_gap_floor=row_gap_floor,
         )
-        routed_edges = route_edges(validated, placed_nodes)
-        overlays = compute_group_overlays(validated, placed_nodes, routed_edges)
+        routed_edges = route_edges(validated, placed_nodes, group_bounds_by_id=group_bounds_by_id)
+        overlays = compute_group_overlays(
+            validated,
+            placed_nodes,
+            routed_edges,
+            group_bounds_by_id=group_bounds_by_id,
+        )
         next_rank_overrides = _rank_gap_overrides(validated, placed_nodes, routed_edges, overlays)
         next_row_overrides = _row_gap_overrides(validated, placed_nodes, routed_edges, overlays)
         if (
@@ -109,6 +155,384 @@ def _layout_graph(validated: "ValidatedPipeline | ValidatedDetailPanel") -> Grap
         row_gap_overrides = next_row_overrides or None
 
     return _normalize_graph_layout(placed_nodes, routed_edges, overlays, validated.theme)
+
+
+def _layout_structural_graph(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    measurements: dict[str, MeasuredText],
+) -> GraphLayout:
+    placement = _layout_container(validated, measurements, group_id=None)
+    placed_nodes = _reindex_hierarchical_components(validated, placement.leaf_nodes)
+    routed_edges = route_edges(validated, placed_nodes, group_bounds_by_id=placement.group_bounds)
+    overlays = compute_group_overlays(
+        validated,
+        placed_nodes,
+        routed_edges,
+        group_bounds_by_id=placement.group_bounds,
+    )
+    return _normalize_graph_layout(placed_nodes, routed_edges, overlays, validated.theme)
+
+
+def _layout_container(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    measurements: dict[str, MeasuredText],
+    *,
+    group_id: str | None,
+) -> _ContainerPlacement:
+    hierarchy = validated.group_hierarchy
+    direct_node_ids = (
+        hierarchy.top_level_node_ids if group_id is None else hierarchy.group_child_node_ids.get(group_id, ())
+    )
+    direct_group_ids = (
+        hierarchy.top_level_group_ids if group_id is None else hierarchy.group_child_group_ids.get(group_id, ())
+    )
+    child_group_placements = {
+        child_group_id: _layout_container(validated, measurements, group_id=child_group_id)
+        for child_group_id in direct_group_ids
+    }
+    temp_validated, temp_measurements = _build_temp_graph(
+        validated,
+        measurements,
+        direct_node_ids=direct_node_ids,
+        direct_group_ids=direct_group_ids,
+        child_group_placements=child_group_placements,
+        container_group_id=group_id,
+    )
+    temp_graph = _layout_flat_graph(temp_validated, temp_measurements)
+    temp_graph = _shift_graph_layout(
+        temp_graph,
+        shift_x=-temp_graph.content_bounds.x,
+        shift_y=-temp_graph.content_bounds.y,
+    )
+    block_rank_spans = {node_id: 1 for node_id in direct_node_ids}
+    block_rank_spans.update({child_group_id: placement.rank_span for child_group_id, placement in child_group_placements.items()})
+    block_order_spans = {node_id: 1 for node_id in direct_node_ids}
+    block_order_spans.update(
+        {child_group_id: placement.order_span for child_group_id, placement in child_group_placements.items()}
+    )
+    rank_widths = _rank_widths_for_blocks(temp_graph.nodes, block_rank_spans)
+    order_heights = _order_heights_for_blocks(temp_graph.nodes, block_order_spans)
+    rank_offsets = _cumulative_offsets(rank_widths)
+    order_offsets = _cumulative_offsets(order_heights)
+
+    leaf_nodes: dict[str, LayoutNode] = {}
+    group_bounds: dict[str, Bounds] = {}
+
+    for node_id in direct_node_ids:
+        anchor = temp_graph.nodes[node_id]
+        leaf_nodes[node_id] = _with_layout_indices(
+            anchor,
+            rank=rank_offsets[anchor.rank],
+            order=order_offsets[anchor.order],
+        )
+
+    for child_group_id, child_placement in child_group_placements.items():
+        anchor = temp_graph.nodes[child_group_id]
+        shift_x = anchor.x - child_placement.bounds.x
+        shift_y = anchor.y - child_placement.bounds.y
+        rank_offset = rank_offsets[anchor.rank]
+        order_offset = order_offsets[anchor.order]
+        for leaf_id, node in child_placement.leaf_nodes.items():
+            leaf_nodes[leaf_id] = _with_layout_indices(
+                _shift_node(node, shift_x, shift_y),
+                rank=node.rank + rank_offset,
+                order=node.order + order_offset,
+            )
+        for nested_group_id, bounds in child_placement.group_bounds.items():
+            group_bounds[nested_group_id] = Bounds(
+                x=round(bounds.x + shift_x, 2),
+                y=round(bounds.y + shift_y, 2),
+                width=bounds.width,
+                height=bounds.height,
+            )
+
+    if group_id is None:
+        return _ContainerPlacement(
+            leaf_nodes=leaf_nodes,
+            group_bounds=group_bounds,
+            bounds=Bounds(
+                x=0.0,
+                y=0.0,
+                width=round(temp_graph.content_bounds.width, 2),
+                height=round(temp_graph.content_bounds.height, 2),
+            ),
+            rank_span=sum(rank_widths.values()) or 1,
+            order_span=sum(order_heights.values()) or 1,
+        )
+
+    metrics = resolve_theme_metrics(validated.theme)
+    inset_x = validated.theme.group_padding
+    inset_top = validated.theme.group_padding + metrics.group_label_padding
+    inset_bottom = validated.theme.group_padding
+
+    shifted_nodes = {
+        node_id: _shift_node(node, inset_x, inset_top)
+        for node_id, node in leaf_nodes.items()
+    }
+    shifted_group_bounds = {
+        nested_group_id: Bounds(
+            x=round(bounds.x + inset_x, 2),
+            y=round(bounds.y + inset_top, 2),
+            width=bounds.width,
+            height=bounds.height,
+        )
+        for nested_group_id, bounds in group_bounds.items()
+    }
+    own_bounds = Bounds(
+        x=0.0,
+        y=0.0,
+        width=round(temp_graph.content_bounds.width + inset_x * 2, 2),
+        height=round(temp_graph.content_bounds.height + inset_top + inset_bottom, 2),
+    )
+    shifted_group_bounds[group_id] = own_bounds
+    return _ContainerPlacement(
+        leaf_nodes=shifted_nodes,
+        group_bounds=shifted_group_bounds,
+        bounds=own_bounds,
+        rank_span=sum(rank_widths.values()) or 1,
+        order_span=sum(order_heights.values()) or 1,
+    )
+
+
+def _build_temp_graph(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    measurements: dict[str, MeasuredText],
+    *,
+    direct_node_ids: tuple[str, ...],
+    direct_group_ids: tuple[str, ...],
+    child_group_placements: dict[str, _ContainerPlacement],
+    container_group_id: str | None,
+) -> tuple[_TempValidatedGraph, dict[str, MeasuredText]]:
+    hierarchy = validated.group_hierarchy
+    block_nodes: list[Node] = []
+    node_lookup: dict[str, Node] = {}
+    node_index: dict[str, int] = {}
+    block_measurements: dict[str, MeasuredText] = {}
+
+    for index, node_id in enumerate((*direct_node_ids, *direct_group_ids)):
+        if node_id in direct_node_ids:
+            node = validated.node_lookup[node_id]
+            block_measurements[node_id] = measurements[node_id]
+        else:
+            group = hierarchy.group_lookup[node_id]
+            placement = child_group_placements[node_id]
+            node = Node(
+                id=node_id,
+                title=group.label,
+                width=placement.bounds.width,
+                height=placement.bounds.height,
+                fill=group.fill,
+                stroke=group.stroke,
+            )
+            block_measurements[node_id] = MeasuredText(
+                title_lines=(),
+                subtitle_lines=(),
+                title_line_height=0.0,
+                subtitle_line_height=0.0,
+                content_height=0.0,
+                width=placement.bounds.width,
+                height=placement.bounds.height,
+            )
+        block_nodes.append(node)
+        node_lookup[node.id] = node
+        node_index[node.id] = index
+
+    projected_edges: list[Edge] = []
+    edge_lookup: dict[str, Edge] = {}
+    edge_targets: dict[str, ResolvedEdgeTarget] = {}
+    edge_index: dict[str, int] = {}
+    seen_pairs: set[tuple[str, str]] = set()
+
+    for edge in validated.edges:
+        source_block_id = _container_direct_block_id(
+            hierarchy,
+            edge.source,
+            container_group_id=container_group_id,
+        )
+        target_block_id = _container_direct_block_id(
+            hierarchy,
+            validated.edge_targets[edge.id].node_id,
+            container_group_id=container_group_id,
+        )
+        if source_block_id is None or target_block_id is None or source_block_id == target_block_id:
+            continue
+        if source_block_id not in node_lookup or target_block_id not in node_lookup:
+            continue
+        pair = (source_block_id, target_block_id)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        projected_edge = Edge(
+            id=f"__proj_{len(projected_edges)}",
+            source=source_block_id,
+            target=target_block_id,
+            color=edge.color,
+            dashed=edge.dashed,
+        )
+        projected_edges.append(projected_edge)
+        edge_lookup[projected_edge.id] = projected_edge
+        edge_targets[projected_edge.id] = ResolvedEdgeTarget(kind="node", node_id=target_block_id)
+        edge_index[projected_edge.id] = len(projected_edges) - 1
+
+    temp_validated = _TempValidatedGraph(
+        nodes=tuple(block_nodes),
+        edges=tuple(projected_edges),
+        groups=(),
+        node_lookup=node_lookup,
+        edge_lookup=edge_lookup,
+        edge_targets=edge_targets,
+        node_index=node_index,
+        edge_index=edge_index,
+        group_hierarchy=SimpleNamespace(  # type: ignore[name-defined]
+            structural_group_ids=(),
+            edge_only_group_ids=(),
+            top_level_group_ids=(),
+            top_level_node_ids=tuple(node_lookup),
+            group_parent_ids={},
+            group_child_group_ids={},
+            group_child_node_ids={},
+            group_descendant_node_ids={},
+            node_parent_group_ids={},
+            group_depths={},
+            group_lookup={},
+            group_index={},
+        ),
+        theme=validated.theme,
+    )
+    return temp_validated, block_measurements
+
+
+def _container_direct_block_id(
+    hierarchy,
+    node_id: str,
+    *,
+    container_group_id: str | None,
+) -> str | None:
+    current_group_id = hierarchy.node_parent_group_ids.get(node_id)
+    if container_group_id is None:
+        if current_group_id is None:
+            return node_id
+        while hierarchy.group_parent_ids.get(current_group_id) is not None:
+            current_group_id = hierarchy.group_parent_ids[current_group_id]
+        return current_group_id
+
+    if current_group_id is None:
+        return None
+    if current_group_id == container_group_id:
+        return node_id
+
+    while True:
+        parent_group_id = hierarchy.group_parent_ids.get(current_group_id)
+        if parent_group_id == container_group_id:
+            return current_group_id
+        if parent_group_id is None:
+            return None
+        current_group_id = parent_group_id
+
+
+def _rank_widths_for_blocks(
+    nodes: dict[str, LayoutNode],
+    spans_by_block_id: dict[str, int],
+) -> dict[int, int]:
+    widths: dict[int, int] = defaultdict(lambda: 1)
+    for block_id, node in nodes.items():
+        widths[node.rank] = max(widths[node.rank], spans_by_block_id.get(block_id, 1))
+    return dict(widths)
+
+
+def _order_heights_for_blocks(
+    nodes: dict[str, LayoutNode],
+    spans_by_block_id: dict[str, int],
+) -> dict[int, int]:
+    heights: dict[int, int] = defaultdict(lambda: 1)
+    for block_id, node in nodes.items():
+        heights[node.order] = max(heights[node.order], spans_by_block_id.get(block_id, 1))
+    return dict(heights)
+
+
+def _cumulative_offsets(spans_by_index: dict[int, int]) -> dict[int, int]:
+    offsets: dict[int, int] = {}
+    cursor = 0
+    for index in sorted(spans_by_index):
+        offsets[index] = cursor
+        cursor += spans_by_index[index]
+    return offsets
+
+
+def _with_layout_indices(node: LayoutNode, *, rank: int, order: int) -> LayoutNode:
+    return LayoutNode(
+        node=node.node,
+        rank=rank,
+        order=order,
+        component_id=node.component_id,
+        width=node.width,
+        height=node.height,
+        x=node.x,
+        y=node.y,
+        title_lines=node.title_lines,
+        subtitle_lines=node.subtitle_lines,
+        title_line_height=node.title_line_height,
+        subtitle_line_height=node.subtitle_line_height,
+        content_height=node.content_height,
+    )
+
+
+def _reindex_hierarchical_components(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    nodes: dict[str, LayoutNode],
+) -> dict[str, LayoutNode]:
+    component_ids = _component_ids_for_validated_graph(validated)
+    reindexed: dict[str, LayoutNode] = {}
+
+    for node_id, node in nodes.items():
+        reindexed[node_id] = LayoutNode(
+            node=node.node,
+            rank=node.rank,
+            order=node.order,
+            component_id=component_ids[node_id],
+            width=node.width,
+            height=node.height,
+            x=node.x,
+            y=node.y,
+            title_lines=node.title_lines,
+            subtitle_lines=node.subtitle_lines,
+            title_line_height=node.title_line_height,
+            subtitle_line_height=node.subtitle_line_height,
+            content_height=node.content_height,
+        )
+
+    return reindexed
+
+
+def _component_ids_for_validated_graph(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+) -> dict[str, int]:
+    adjacency: dict[str, set[str]] = {node.id: set() for node in validated.nodes}
+    for edge in validated.edges:
+        target_node_id = validated.edge_targets[edge.id].node_id
+        adjacency[edge.source].add(target_node_id)
+        adjacency[target_node_id].add(edge.source)
+
+    component_ids: dict[str, int] = {}
+    seen: set[str] = set()
+    component_id = 0
+
+    for node in validated.nodes:
+        if node.id in seen:
+            continue
+        queue = deque([node.id])
+        seen.add(node.id)
+        while queue:
+            node_id = queue.popleft()
+            component_ids[node_id] = component_id
+            for neighbor in sorted(adjacency[node_id], key=validated.node_index.__getitem__):
+                if neighbor in seen:
+                    continue
+                seen.add(neighbor)
+                queue.append(neighbor)
+        component_id += 1
+
+    return component_ids
 
 
 def _rank_gap_overrides(

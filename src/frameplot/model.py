@@ -74,18 +74,21 @@ class Edge:
 
 @dataclass(slots=True)
 class Group:
-    """Highlight related nodes or edges with a labeled overlay.
+    """Describe a structural container group or an edge-only highlight.
 
-    Groups stay visual first: they do not pin members together or force a
-    compact cluster. Layout still follows dependency ranks, and routes leaving
-    or re-entering grouped nodes bend outside the grouped area. At least one
-    node or edge reference is required.
+    Groups with `node_ids` or `group_ids` participate in layout as container
+    blocks that can hold direct child nodes and direct child groups. `edge_ids`
+    remain optional visual highlights and do not affect containment structure.
+    Prefer explicit nesting via `group_ids`; strict-subset legacy node groups
+    are still normalized into a tree for compatibility. At least one node,
+    group, or edge reference is required.
     """
 
     id: str
     label: str
     node_ids: tuple[str, ...]
     edge_ids: tuple[str, ...] = ()
+    group_ids: tuple[str, ...] = ()
     stroke: str | None = None
     fill: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -94,13 +97,14 @@ class Group:
         self.id = self.id.strip()
         self.label = self.label.strip()
         self.node_ids = tuple(node_id.strip() for node_id in self.node_ids if node_id.strip())
+        self.group_ids = tuple(group_id.strip() for group_id in self.group_ids if group_id.strip())
         self.edge_ids = tuple(edge_id.strip() for edge_id in self.edge_ids if edge_id.strip())
         if not self.id:
             raise ValueError("Group id must not be empty.")
         if not self.label:
             raise ValueError("Group label must not be empty.")
-        if not self.node_ids and not self.edge_ids:
-            raise ValueError("Group must reference at least one node or edge.")
+        if not self.node_ids and not self.group_ids and not self.edge_ids:
+            raise ValueError("Group must reference at least one node, group, or edge.")
 
 
 @dataclass(slots=True)

@@ -23,8 +23,11 @@ class Pipeline:
     dependency-driven left-to-right auto-layout, so it works best when kept to
     one abstraction level. If stage flow and internal mechanics are mixed into
     the same graph, ranks can stretch and routes can become unexpectedly long;
-    move those internals into a :class:`DetailPanel` instead. Passing
-    `theme=None` uses the default :class:`Theme`.
+    move those internals into a :class:`DetailPanel` instead. Groups with
+    `node_ids` or `group_ids` behave as structural container blocks. Prefer
+    explicit nesting with `group_ids`; strict-subset legacy node groups are
+    still normalized into a tree for compatibility. Passing `theme=None` uses
+    the default :class:`Theme`.
     """
 
     nodes: tuple[Node, ...]

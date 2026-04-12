@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "frameplot"
-version = "0.5.7"
+version = "0.5.8"
 description = "Turn Python-defined pipeline graphs into presentation-ready SVG and PNG diagrams."
 readme = "README.md"
 requires-python = ">=3.11"

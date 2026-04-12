@@ -51,7 +51,7 @@ def render_svg(layout: LayoutResult, theme: Theme) -> str:
     )
 
     group_layer = ET.SubElement(root, ET.QName(SVG_NS, "g"), attrib={"id": "groups"})
-    _render_groups(group_layer, layout.main, theme, metrics)
+    _render_group_shapes(group_layer, layout.main, theme, metrics)
 
     if layout.detail_panel is not None:
         guide_layer = ET.SubElement(root, ET.QName(SVG_NS, "g"), attrib={"id": "detail-panel-guides"})
@@ -62,8 +62,8 @@ def render_svg(layout: LayoutResult, theme: Theme) -> str:
             ET.QName(SVG_NS, "g"),
             attrib={"id": f"detail-panel-{layout.detail_panel.panel.id}"},
         )
-        _render_detail_panel_container(panel_layer, layout.detail_panel, theme, metrics)
-        _render_groups(panel_layer, layout.detail_panel.graph, theme, metrics)
+        _render_detail_panel_container_shape(panel_layer, layout.detail_panel, theme, metrics)
+        _render_group_shapes(panel_layer, layout.detail_panel.graph, theme, metrics)
 
     edge_layer = ET.SubElement(root, ET.QName(SVG_NS, "g"), attrib={"id": "edges"})
     _render_edges(edge_layer, layout.main.edges, marker_ids, theme, metrics)
@@ -85,6 +85,12 @@ def render_svg(layout: LayoutResult, theme: Theme) -> str:
             metrics,
             id_prefix=f"detail-panel-{layout.detail_panel.panel.id}-",
         )
+
+    label_layer = ET.SubElement(root, ET.QName(SVG_NS, "g"), attrib={"id": "labels"})
+    _render_group_labels(label_layer, layout.main, theme, metrics)
+    if layout.detail_panel is not None:
+        _render_detail_panel_title(label_layer, layout.detail_panel, theme, metrics)
+        _render_group_labels(label_layer, layout.detail_panel.graph, theme, metrics)
 
     return ET.tostring(root, encoding="unicode")
 
@@ -142,7 +148,7 @@ def _build_shadow_filter(defs: ET.Element, metrics: ResolvedThemeMetrics) -> Non
     ET.SubElement(merge, ET.QName(SVG_NS, "feMergeNode"), attrib={"in": "SourceGraphic"})
 
 
-def _render_groups(
+def _render_group_shapes(
     parent: ET.Element,
     graph: GraphLayout,
     theme: Theme,
@@ -180,18 +186,28 @@ def _render_groups(
                     "stroke-linecap": "round",
                 },
             )
-        ET.SubElement(
+
+
+def _render_group_labels(
+    parent: ET.Element,
+    graph: GraphLayout,
+    theme: Theme,
+    metrics: ResolvedThemeMetrics,
+) -> None:
+    for overlay in graph.groups:
+        _render_label_text(
             parent,
-            ET.QName(SVG_NS, "text"),
-            attrib={
-                "x": _fmt(overlay.bounds.x + theme.group_padding),
-                "y": _fmt(overlay.bounds.y + metrics.group_label_baseline_offset),
-                "fill": theme.group_label_color,
-                "font-family": theme.title_font_family,
-                "font-size": _fmt(theme.subtitle_font_size),
-                "font-weight": str(theme.title_font_weight),
-            },
-        ).text = overlay.group.label
+            text=overlay.group.label,
+            x=overlay.bounds.x + theme.group_padding,
+            baseline_y=overlay.bounds.y + metrics.group_label_baseline_offset,
+            font_family=theme.title_font_family,
+            font_size=theme.subtitle_font_size,
+            font_weight=theme.title_font_weight,
+            text_color=theme.group_label_color,
+            underpaint_color=theme.background_color,
+            underpaint_opacity=1.0,
+            underpaint_width=max(theme.stroke_width * 3.0, theme.subtitle_font_size * 0.24),
+        )
 
 
 def _render_guide_lines(parent: ET.Element, guide_lines: tuple[GuideLine, ...], theme: Theme) -> None:
@@ -209,7 +225,7 @@ def _render_guide_lines(parent: ET.Element, guide_lines: tuple[GuideLine, ...], 
         )
 
 
-def _render_detail_panel_container(
+def _render_detail_panel_container_shape(
     parent: ET.Element,
     detail_panel: DetailPanelLayout,
     theme: Theme,
@@ -243,18 +259,72 @@ def _render_detail_panel_container(
         },
     )
 
+
+def _render_detail_panel_title(
+    parent: ET.Element,
+    detail_panel: DetailPanelLayout,
+    theme: Theme,
+    metrics: ResolvedThemeMetrics,
+) -> None:
+    _render_label_text(
+        parent,
+        text=detail_panel.panel.label,
+        x=detail_panel.bounds.x + theme.detail_panel_padding,
+        baseline_y=detail_panel.bounds.y + metrics.detail_panel_title_baseline_offset,
+        font_family=theme.title_font_family,
+        font_size=theme.subtitle_font_size,
+        font_weight=theme.title_font_weight,
+        text_color=theme.detail_panel_title_color,
+        underpaint_color=detail_panel.fill,
+        underpaint_opacity=1.0,
+        underpaint_width=max(theme.stroke_width * 3.0, theme.subtitle_font_size * 0.26),
+    )
+
+
+def _render_label_text(
+    parent: ET.Element,
+    *,
+    text: str,
+    x: float,
+    baseline_y: float,
+    font_family: str,
+    font_size: float,
+    font_weight: int,
+    text_color: str,
+    underpaint_color: str,
+    underpaint_opacity: float,
+    underpaint_width: float,
+) -> None:
     ET.SubElement(
         parent,
         ET.QName(SVG_NS, "text"),
         attrib={
-            "x": _fmt(detail_panel.bounds.x + theme.detail_panel_padding),
-            "y": _fmt(detail_panel.bounds.y + metrics.detail_panel_title_baseline_offset),
-            "fill": theme.detail_panel_title_color,
-            "font-family": theme.title_font_family,
-            "font-size": _fmt(theme.subtitle_font_size),
-            "font-weight": str(theme.title_font_weight),
+            "x": _fmt(x),
+            "y": _fmt(baseline_y),
+            "fill": underpaint_color,
+            "fill-opacity": _fmt(underpaint_opacity),
+            "stroke": underpaint_color,
+            "stroke-opacity": _fmt(underpaint_opacity),
+            "stroke-width": _fmt(underpaint_width),
+            "stroke-linejoin": "round",
+            "font-family": font_family,
+            "font-size": _fmt(font_size),
+            "font-weight": str(font_weight),
         },
-    ).text = detail_panel.panel.label
+    ).text = text
+
+    ET.SubElement(
+        parent,
+        ET.QName(SVG_NS, "text"),
+        attrib={
+            "x": _fmt(x),
+            "y": _fmt(baseline_y),
+            "fill": text_color,
+            "font-family": font_family,
+            "font-size": _fmt(font_size),
+            "font-weight": str(font_weight),
+        },
+    ).text = text
 
 
 def _render_edges(

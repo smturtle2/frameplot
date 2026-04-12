@@ -19,8 +19,12 @@ class Pipeline:
     """Describe and render a pipeline diagram.
 
     The constructor accepts any iterable of nodes, edges, and groups, then
-    normalizes them to tuples for deterministic rendering. Passing `theme=None`
-    uses the default :class:`Theme`.
+    normalizes them to tuples for deterministic rendering. The main graph uses
+    dependency-driven left-to-right auto-layout, so it works best when kept to
+    one abstraction level. If stage flow and internal mechanics are mixed into
+    the same graph, ranks can stretch and routes can become unexpectedly long;
+    move those internals into a :class:`DetailPanel` instead. Passing
+    `theme=None` uses the default :class:`Theme`.
     """
 
     nodes: tuple[Node, ...]

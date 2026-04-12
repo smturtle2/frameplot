@@ -76,9 +76,10 @@ class Edge:
 class Group:
     """Highlight related nodes or edges with a labeled overlay.
 
-    Groups stay visual first, but routes leaving or re-entering grouped nodes
-    bend outside the grouped area. At least one node or edge reference is
-    required.
+    Groups stay visual first: they do not pin members together or force a
+    compact cluster. Layout still follows dependency ranks, and routes leaving
+    or re-entering grouped nodes bend outside the grouped area. At least one
+    node or edge reference is required.
     """
 
     id: str
@@ -106,8 +107,10 @@ class Group:
 class DetailPanel:
     """Expand a focus node into a lower inset with its own mini-graph.
 
-    The focus node must exist in the main pipeline graph, and the panel must
-    contain at least one node.
+    Use a detail panel when a node's internal mechanics would otherwise add
+    long-range or cross-level edges to the main graph. The focus node must
+    exist in the main pipeline graph, and the panel must contain at least one
+    node.
     """
 
     id: str

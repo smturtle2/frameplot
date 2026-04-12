@@ -118,6 +118,12 @@ Top-level imports are the supported public API:
 - `to_png_bytes(scale=4.0) -> bytes`
 - `save_png(path, scale=4.0) -> None`
 
+## Modeling Guidance
+
+- Keep the main graph at one abstraction level. Frameplot lays the pipeline out as a dependency-driven left-to-right graph, not as a freeform block diagram.
+- Use `DetailPanel` for repeated block internals or per-stage mechanics that would otherwise create long-range edges in the main graph.
+- Use `Group` to highlight nearby related nodes, not to force distant nodes to stay together. Groups are visual overlays and routing obstacles, so very wide groups can increase route detours.
+
 ## Advanced Example: Multi-cloud Data Pipeline
 
 The hero image at the top and the theme gallery above are generated from [`examples/theme_heroes.py`](https://github.com/smturtle2/frameplot/blob/main/examples/theme_heroes.py), using the shared pipeline definition in [`examples/hero_pipeline.py`](https://github.com/smturtle2/frameplot/blob/main/examples/hero_pipeline.py). Together they showcase:
@@ -132,6 +138,7 @@ The hero image at the top and the theme gallery above are generated from [`examp
 - Edge labels are not supported yet, but edge-to-edge joins can render optional `+` / `x` badges.
 - Groups stay visual overlays, and routes leaving or re-entering grouped nodes bend outside grouped areas.
 - Detail panels render as separate lower insets attached to a focus node in the main flow.
+- If a sample looks stretched or routes far outside the intended block, the graph usually mixes stage-level flow with internal logic in one plane; move the internals into a `DetailPanel`.
 
 ## Development
 

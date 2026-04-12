@@ -1384,6 +1384,30 @@ def test_text_measurement_and_render_share_resolved_baselines() -> None:
     assert float(texts[1].attrib["y"]) == pytest.approx(expected_subtitle_y)
 
 
+def test_text_measurement_preserves_explicit_newlines() -> None:
+    pipeline = Pipeline(
+        nodes=[Node("focus", "Primary Title", "First subtitle line\nSecond subtitle line")],
+        edges=[],
+    )
+
+    layout = build_layout(pipeline)
+    layout_node = layout.main.nodes["focus"]
+    node_group = ET.fromstring(pipeline.to_svg()).find(".//svg:g[@id='focus']", SVG_NS)
+
+    assert node_group is not None
+    texts = node_group.findall("svg:text", SVG_NS)
+
+    assert layout_node.subtitle_lines == ("First subtitle line", "Second subtitle line")
+    assert [text.text for text in texts] == [
+        "Primary Title",
+        "First subtitle line",
+        "Second subtitle line",
+    ]
+    assert float(texts[2].attrib["y"]) - float(texts[1].attrib["y"]) == pytest.approx(
+        layout_node.subtitle_line_height
+    )
+
+
 def test_detail_panel_renders_as_separate_block_with_guides() -> None:
     pipeline = Pipeline(
         nodes=[
@@ -1415,6 +1439,50 @@ def test_detail_panel_renders_as_separate_block_with_guides() -> None:
     assert "cross-attention" in svg
     assert "local_count" in svg
     assert svg.count('marker-end="url(#arrow-') == 4
+
+
+def test_group_and_detail_panel_labels_render_after_nodes() -> None:
+    theme = Theme.dark()
+    pipeline = Pipeline(
+        nodes=[
+            Node("source", "Source"),
+            Node("focus", "Focus"),
+        ],
+        edges=[Edge("e1", "source", "focus")],
+        groups=[Group("g1", "Shared Stage", ("source", "focus"))],
+        detail_panel=DetailPanel(
+            "detail",
+            "focus",
+            "Expanded Focus",
+            nodes=(Node("inner", "Inner"),),
+            edges=(),
+        ),
+        theme=theme,
+    )
+
+    root = ET.fromstring(pipeline.to_svg())
+    layer_ids = [child.attrib.get("id") for child in root if child.tag == f"{{{SVG_NS['svg']}}}g"]
+    labels = root.find(".//svg:g[@id='labels']", SVG_NS)
+
+    assert labels is not None
+    label_rects = labels.findall("svg:rect", SVG_NS)
+    label_texts = labels.findall("svg:text", SVG_NS)
+    shared_stage = [text for text in label_texts if text.text == "Shared Stage"]
+    expanded_focus = [text for text in label_texts if text.text == "Expanded Focus"]
+
+    assert not label_rects
+    assert len(shared_stage) == 2
+    assert len(expanded_focus) == 2
+    assert shared_stage[0].attrib["stroke"] == theme.background_color
+    assert shared_stage[0].attrib["fill"] == theme.background_color
+    assert shared_stage[1].attrib["fill"] == theme.group_label_color
+    assert "stroke" not in shared_stage[1].attrib
+    assert expanded_focus[0].attrib["stroke"] == theme.detail_panel_fill
+    assert expanded_focus[0].attrib["fill"] == theme.detail_panel_fill
+    assert expanded_focus[1].attrib["fill"] == theme.detail_panel_title_color
+    assert "stroke" not in expanded_focus[1].attrib
+    assert layer_ids.index("nodes") < layer_ids.index("labels")
+    assert layer_ids.index("edge-joins") < layer_ids.index("labels")
 
 
 def test_detail_panel_biases_focus_flow_to_lower_rows() -> None:

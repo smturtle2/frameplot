@@ -64,14 +64,20 @@ def measure_text(validated: ValidatedPipeline) -> dict[str, MeasuredText]:
 def _wrap(value: str | None, width: int) -> list[str]:
     if not value:
         return []
-    wrapped = textwrap.wrap(
-        value,
-        width=width,
-        break_long_words=True,
-        break_on_hyphens=False,
-        drop_whitespace=True,
-    )
-    return wrapped or [value]
+    lines: list[str] = []
+    for explicit_line in value.splitlines() or [value]:
+        if explicit_line == "":
+            lines.append("")
+            continue
+        wrapped = textwrap.wrap(
+            explicit_line,
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=False,
+            drop_whitespace=True,
+        )
+        lines.extend(wrapped or [explicit_line])
+    return lines
 
 
 def _max_line_width(lines: tuple[str, ...], font_size: float, ratio: float) -> float:

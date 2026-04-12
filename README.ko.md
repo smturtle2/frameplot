@@ -118,6 +118,12 @@ pipeline = Pipeline(
 - `to_png_bytes(scale=4.0) -> bytes`
 - `save_png(path, scale=4.0) -> None`
 
+## 모델링 가이드
+
+- 메인 그래프는 한 가지 추상화 레벨로 유지하세요. Frameplot은 이를 자유 배치 블록 다이어그램이 아니라 의존 관계 기반의 좌→우 그래프로 배치합니다.
+- 반복 블록 내부나 단계별 내부 메커니즘처럼 메인 그래프에 넣으면 장거리 edge가 생기는 내용은 `DetailPanel`로 분리하세요.
+- `Group`은 서로 가까운 노드를 강조하는 용도이지, 멀리 떨어진 노드를 강제로 붙여 두는 기능이 아닙니다. 그룹은 시각적 오버레이이면서 라우팅 장애물이기 때문에, 너무 넓은 그룹은 우회 경로를 늘릴 수 있습니다.
+
 ## 고급 예제: 멀티 클라우드 데이터 파이프라인
 
 상단 hero 이미지와 위의 테마 갤러리는 [`examples/theme_heroes.py`](https://github.com/smturtle2/frameplot/blob/main/examples/theme_heroes.py)에서 생성되며, 공통 파이프라인 정의는 [`examples/hero_pipeline.py`](https://github.com/smturtle2/frameplot/blob/main/examples/hero_pipeline.py)에 있습니다. 함께 다음과 같은 특징을 보여줍니다:
@@ -132,6 +138,7 @@ pipeline = Pipeline(
 - edge label은 아직 지원하지 않지만, edge-to-edge 합류 지점에는 선택적으로 `+` / `x` 배지를 그릴 수 있습니다.
 - 그룹은 시각적 오버레이이며, grouped node를 드나드는 라우트는 그룹 바깥에서 bend합니다.
 - detail panel은 메인 플로우 아래쪽의 별도 inset 블록으로 렌더링됩니다.
+- 샘플이 옆으로 과하게 늘어나거나 라우트가 블록 바깥으로 멀리 우회한다면, 대개 메인 단계 흐름과 내부 로직을 한 평면에 섞어 넣은 경우입니다. 이런 내부 로직은 `DetailPanel`로 빼는 편이 맞습니다.
 
 ## 개발
 

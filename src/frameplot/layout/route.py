@@ -90,12 +90,47 @@ class GroupRoutingFrame:
     top_reserve: float
 
 
+@dataclass(slots=True, frozen=True)
+class PreparedGroupLayout:
+    group: "Group"
+    bounds: Bounds
+    member_bounds: Bounds
+    content_bounds: Bounds
+    header_top: float
+    header_bottom: float
+    top_reserve: float
+    depth: int
+
+
 @dataclass(slots=True)
 class RoutingGroups:
     frames_by_id: dict[str, GroupRoutingFrame]
     bounds_by_id: dict[str, Bounds]
     node_group_ids: dict[str, tuple[str, ...]]
     component_group_ids: dict[int, tuple[str, ...]]
+    depth_by_id: dict[str, int]
+
+
+@dataclass(slots=True, frozen=True)
+class EndpointAccessDescriptor:
+    edge_id: str
+    node_id: str
+    endpoint_kind: str
+    side: str
+    axis: str
+    lane_start_index: int
+    lane_end_index: int
+    lane_start: Point
+    lane_end: Point
+    approach_point: Point | None
+
+
+@dataclass(slots=True, frozen=True)
+class InteractionMetrics:
+    edge_crossings: int = 0
+    edge_overlap_length: float = 0.0
+    obstacle_overlap_length: float = 0.0
+    obstacle_crossings: int = 0
 
 
 def _resolved_target(validated: "ValidatedPipeline | ValidatedDetailPanel", edge: "Edge"):
@@ -255,6 +290,17 @@ def route_edges(
                 join_badge_radius=badge_radius,
             )
 
+    _repair_forward_conflicts(
+        validated=validated,
+        nodes=nodes,
+        routed_by_id=routed_by_id,
+        ordered_node_edges=ordered_node_edges,
+        component_geometry=component_geometry,
+        pair_offsets=pair_offsets,
+        routing_groups=routing_groups,
+    )
+    _separate_overlapping_endpoints(validated, nodes, routed_by_id)
+
     return tuple(routed_by_id[edge.id] for edge in validated.edges)
 
 
@@ -266,38 +312,18 @@ def _build_routing_groups(
     bounds_by_id: dict[str, Bounds] = {}
     node_group_ids: dict[str, list[str]] = defaultdict(list)
     component_group_ids: dict[int, set[str]] = defaultdict(set)
+    prepared_groups = _prepare_group_layouts(validated, nodes)
 
-    for group in validated.groups:
-        if not group.node_ids:
-            continue
-
-        member_bounds = union_bounds([nodes[node_id].bounds for node_id in group.node_ids])
-        top_reserve = _group_internal_back_edge_top_reserve(group, validated, nodes)
-        left_reserve, right_reserve = _group_internal_back_edge_side_reserves(
-            group,
-            validated,
-            nodes,
-            validated.theme,
-            member_bounds,
-        )
-        bounds = _group_clearance_bounds_for_member_bounds(
-            member_bounds,
-            validated.theme,
-            top_reserve=top_reserve,
-            left_reserve=left_reserve,
-            right_reserve=right_reserve,
-        )
-        header_top = round(bounds.y + _group_label_padding(validated.theme), 2)
-        header_bottom = round(member_bounds.y, 2)
-
+    for prepared in prepared_groups:
+        group = prepared.group
         frames_by_id[group.id] = GroupRoutingFrame(
-            bounds=bounds,
-            member_bounds=member_bounds,
-            header_top=header_top,
-            header_bottom=header_bottom,
-            top_reserve=top_reserve,
+            bounds=prepared.bounds,
+            member_bounds=prepared.member_bounds,
+            header_top=prepared.header_top,
+            header_bottom=prepared.header_bottom,
+            top_reserve=prepared.top_reserve,
         )
-        bounds_by_id[group.id] = bounds
+        bounds_by_id[group.id] = prepared.bounds
         for node_id in group.node_ids:
             node_group_ids[node_id].append(group.id)
             component_group_ids[nodes[node_id].component_id].add(group.id)
@@ -310,7 +336,159 @@ def _build_routing_groups(
             component_id: tuple(sorted(group_ids))
             for component_id, group_ids in component_group_ids.items()
         },
+        depth_by_id={prepared.group.id: prepared.depth for prepared in prepared_groups},
     )
+
+
+def _prepare_group_layouts(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    nodes: dict[str, LayoutNode],
+    edge_lookup: dict[str, RoutedEdge] | None = None,
+) -> tuple[PreparedGroupLayout, ...]:
+    groups = tuple(group for group in validated.groups if group.node_ids)
+    if not groups:
+        return ()
+
+    group_indices = {group.id: index for index, group in enumerate(groups)}
+    group_nodes = {group.id: frozenset(group.node_ids) for group in groups}
+    parent_ids = _direct_group_parent_ids(groups, group_nodes)
+    depths = _group_depths(groups, parent_ids)
+    children_by_parent = _group_children_by_parent(parent_ids, group_indices)
+    preparation_order = sorted(groups, key=lambda group: (-depths[group.id], group_indices[group.id]))
+    ordered_groups = sorted(groups, key=lambda group: (depths[group.id], group_indices[group.id]))
+    prepared_by_id: dict[str, PreparedGroupLayout] = {}
+
+    for group in preparation_order:
+        member_bounds = union_bounds([nodes[node_id].bounds for node_id in group.node_ids])
+        top_reserve = _group_internal_back_edge_top_reserve(group, validated, nodes)
+        left_reserve, right_reserve = _group_internal_back_edge_side_reserves(
+            group,
+            validated,
+            nodes,
+            validated.theme,
+            member_bounds,
+        )
+        direct_child_ids = children_by_parent.get(group.id, ())
+        has_direct_children = bool(direct_child_ids)
+        content_bounds = _group_content_bounds(
+            group=group,
+            nodes=nodes,
+            edge_lookup=edge_lookup,
+            group_nodes=group_nodes,
+            direct_child_ids=direct_child_ids,
+            prepared_by_id=prepared_by_id,
+        )
+        bounds = _group_clearance_bounds_for_member_bounds(
+            content_bounds,
+            validated.theme,
+            top_reserve=top_reserve,
+            left_reserve=left_reserve,
+            right_reserve=right_reserve,
+        )
+        header_top = round(bounds.y + _group_label_padding(validated.theme), 2)
+        header_bottom = round(content_bounds.y if has_direct_children else member_bounds.y, 2)
+        prepared_by_id[group.id] = PreparedGroupLayout(
+            group=group,
+            bounds=bounds,
+            member_bounds=member_bounds,
+            content_bounds=content_bounds,
+            header_top=header_top,
+            header_bottom=header_bottom,
+            top_reserve=top_reserve,
+            depth=depths[group.id],
+        )
+
+    return tuple(prepared_by_id[group.id] for group in ordered_groups)
+
+
+def _group_content_bounds(
+    *,
+    group: "Group",
+    nodes: dict[str, LayoutNode],
+    edge_lookup: dict[str, RoutedEdge] | None,
+    group_nodes: dict[str, frozenset[str]],
+    direct_child_ids: tuple[str, ...],
+    prepared_by_id: dict[str, PreparedGroupLayout],
+) -> Bounds:
+    if not direct_child_ids:
+        return _group_leaf_content_bounds(group, nodes, edge_lookup)
+
+    child_node_ids = {
+        node_id
+        for child_id in direct_child_ids
+        for node_id in group_nodes[child_id]
+    }
+    bounds = [prepared_by_id[child_id].bounds for child_id in direct_child_ids if child_id in prepared_by_id]
+    bounds.extend(nodes[node_id].bounds for node_id in group.node_ids if node_id not in child_node_ids)
+    if edge_lookup is not None:
+        bounds.extend(edge_lookup[edge_id].bounds for edge_id in group.edge_ids if edge_id in edge_lookup)
+    return union_bounds(bounds)
+
+
+def _group_leaf_content_bounds(
+    group: "Group",
+    nodes: dict[str, LayoutNode],
+    edge_lookup: dict[str, RoutedEdge] | None,
+) -> Bounds:
+    bounds = [nodes[node_id].bounds for node_id in group.node_ids]
+    if edge_lookup is not None:
+        bounds.extend(edge_lookup[edge_id].bounds for edge_id in group.edge_ids if edge_id in edge_lookup)
+    return union_bounds(bounds)
+
+
+def _direct_group_parent_ids(
+    groups: tuple["Group", ...],
+    group_nodes: dict[str, frozenset[str]],
+) -> dict[str, str]:
+    parent_ids: dict[str, str] = {}
+
+    for group in groups:
+        node_ids = group_nodes[group.id]
+        candidates = [
+            other.id
+            for other in groups
+            if other.id != group.id and node_ids < group_nodes[other.id]
+        ]
+        if not candidates:
+            continue
+
+        min_size = min(len(group_nodes[group_id]) for group_id in candidates)
+        smallest = [group_id for group_id in candidates if len(group_nodes[group_id]) == min_size]
+        if len(smallest) == 1:
+            parent_ids[group.id] = smallest[0]
+
+    return parent_ids
+
+
+def _group_depths(
+    groups: tuple["Group", ...],
+    parent_ids: dict[str, str],
+) -> dict[str, int]:
+    depths: dict[str, int] = {}
+
+    def _depth(group_id: str) -> int:
+        if group_id in depths:
+            return depths[group_id]
+        parent_id = parent_ids.get(group_id)
+        depths[group_id] = 0 if parent_id is None else _depth(parent_id) + 1
+        return depths[group_id]
+
+    for group in groups:
+        _depth(group.id)
+    return depths
+
+
+def _group_children_by_parent(
+    parent_ids: dict[str, str],
+    group_indices: dict[str, int],
+) -> dict[str, tuple[str, ...]]:
+    children_by_parent: dict[str, list[str]] = defaultdict(list)
+    for child_id, parent_id in parent_ids.items():
+        children_by_parent[parent_id].append(child_id)
+    return {
+        parent_id: tuple(sorted(child_ids, key=lambda child_id: group_indices[child_id]))
+        for parent_id, child_ids in children_by_parent.items()
+    }
 
 
 def _group_clearance_bounds(
@@ -405,34 +583,26 @@ def compute_group_overlays(
     routed_edges: tuple[RoutedEdge, ...],
 ) -> tuple[GroupOverlay, ...]:
     edge_lookup = {route.edge.id: route for route in routed_edges}
-    overlays: list[GroupOverlay] = []
+    overlays = [
+        GroupOverlay(
+            group=prepared.group,
+            bounds=prepared.bounds,
+            stroke=prepared.group.stroke or validated.theme.group_stroke,
+            fill=prepared.group.fill or validated.theme.group_fill,
+        )
+        for prepared in _prepare_group_layouts(validated, nodes, edge_lookup=edge_lookup)
+    ]
 
     for group in validated.groups:
-        group_node_set = set(group.node_ids)
-        group_bounds = [nodes[node_id].bounds for node_id in group.node_ids]
-        group_bounds.extend(edge_lookup[edge_id].bounds for edge_id in group.edge_ids)
-
-        member_bounds = union_bounds([nodes[node_id].bounds for node_id in group.node_ids])
-        top_reserve = _group_internal_back_edge_top_reserve(group, validated, nodes)
-        left_reserve, right_reserve = _group_internal_back_edge_side_reserves(
-            group,
-            validated,
-            nodes,
-            validated.theme,
-            member_bounds,
-        )
-
-        bounds = _group_clearance_bounds_for_member_bounds(
-            union_bounds(group_bounds),
-            validated.theme,
-            top_reserve=top_reserve,
-            left_reserve=left_reserve,
-            right_reserve=right_reserve,
-        )
+        if group.node_ids or not group.edge_ids:
+            continue
+        edge_bounds = [edge_lookup[edge_id].bounds for edge_id in group.edge_ids if edge_id in edge_lookup]
+        if not edge_bounds:
+            continue
         overlays.append(
             GroupOverlay(
                 group=group,
-                bounds=bounds,
+                bounds=_group_clearance_bounds_for_member_bounds(union_bounds(edge_bounds), validated.theme),
                 stroke=group.stroke or validated.theme.group_stroke,
                 fill=group.fill or validated.theme.group_fill,
             )
@@ -635,47 +805,45 @@ def _select_forward_route(
         pair_offset=pair_offset,
         theme=theme,
     )
+    relevant_groups = _relevant_group_bounds_for_optional_routing_groups(
+        source_node.node.id,
+        target_node.node.id,
+        routing_groups,
+    )
+    evaluations: list[tuple[bool, tuple[int, int, int, float, float, int, float, int, float, int], CandidatePath]] = []
 
-    best: CandidatePath | None = None
-    best_score: float | None = None
-    fallback: CandidatePath | None = None
-    fallback_score: float | None = None
-
-    for kind, candidate in candidates:
-        score = _forward_score(
+    for candidate_index, (kind, candidate) in enumerate(candidates):
+        clearance_ok = _path_respects_group_clearance(
+            candidate.points,
+            source_node.node.id,
+            target_node.node.id,
+            routing_groups,
+        )
+        interactions = _candidate_interaction_metrics(
+            candidate,
+            occupancy=occupancy,
+            source_node_id=source_node.node.id,
+            target_node_id=target_node.node.id,
+            routing_groups=routing_groups,
+        )
+        priority_key = _forward_priority_key(
             kind=kind,
             candidate=candidate,
+            candidate_index=candidate_index,
             source_node=source_node,
             target_node=target_node,
             nodes=nodes,
             outgoing_count=outgoing_count,
             incoming_count=incoming_count,
             theme=theme,
+            has_relevant_groups=bool(relevant_groups),
+            interactions=interactions,
         )
+        evaluations.append((clearance_ok, priority_key, candidate))
 
-        if not _path_respects_group_clearance(
-            candidate.points,
-            source_node.node.id,
-            target_node.node.id,
-            routing_groups,
-        ):
-            continue
-
-        if fallback_score is None or score < fallback_score:
-            fallback = candidate
-            fallback_score = score
-
-        if _candidate_conflicts(candidate, occupancy):
-            continue
-
-        if best_score is None or score < best_score:
-            best = candidate
-            best_score = score
-
-    if best is not None:
-        return best
-    assert fallback is not None
-    return fallback
+    selected = _select_candidate_with_priority(evaluations)
+    assert selected is not None
+    return selected
 
 
 def _route_forward(
@@ -884,45 +1052,38 @@ def _select_edge_join_route(
         theme=theme,
     )
     direction = _edge_direction_kind(source_node, target_node)
-    best: CandidatePath | None = None
-    best_score: float | None = None
-    fallback: CandidatePath | None = None
-    fallback_score: float | None = None
+    evaluations: list[tuple[bool, tuple[int, int, int, float, float, int, float, int, float, int], CandidatePath]] = []
 
-    for kind, candidate in candidates:
-        score = _edge_join_score(
+    for candidate_index, (kind, candidate) in enumerate(candidates):
+        clearance_ok = _path_respects_group_clearance(
+            candidate.points,
+            source_node.node.id,
+            target_node.node.id,
+            routing_groups,
+        )
+        interactions = _candidate_interaction_metrics(
+            candidate,
+            occupancy=occupancy,
+            source_node_id=source_node.node.id,
+            target_node_id=target_node.node.id,
+            routing_groups=routing_groups,
+        )
+        priority_key = _edge_join_priority_key(
             kind=kind,
             candidate=candidate,
+            candidate_index=candidate_index,
             source_node=source_node,
             target_node=target_node,
             nodes=nodes,
             theme=theme,
             direction=direction,
+            interactions=interactions,
         )
+        evaluations.append((clearance_ok, priority_key, candidate))
 
-        if not _path_respects_group_clearance(
-            candidate.points,
-            source_node.node.id,
-            target_node.node.id,
-            routing_groups,
-        ):
-            continue
-
-        if fallback_score is None or score < fallback_score:
-            fallback = candidate
-            fallback_score = score
-
-        if _candidate_conflicts(candidate, occupancy):
-            continue
-
-        if best_score is None or score < best_score:
-            best = candidate
-            best_score = score
-
-    if best is not None:
-        return best
-    if fallback is not None:
-        return fallback
+    selected = _select_candidate_with_priority(evaluations)
+    if selected is not None:
+        return selected
     raise AssertionError(f"No viable join route found for edge {edge.id}.")
 
 
@@ -1052,34 +1213,6 @@ def _unique_lanes(lanes: tuple[float, ...]) -> tuple[float, ...]:
     return tuple(dict.fromkeys(round(lane, 2) for lane in lanes))
 
 
-def _edge_join_score(
-    *,
-    kind: str,
-    candidate: CandidatePath,
-    source_node: LayoutNode,
-    target_node: LayoutNode,
-    nodes: dict[str, LayoutNode],
-    theme: "Theme",
-    direction: str,
-) -> float:
-    points = candidate.points
-    length = _path_length(points)
-    bends = _bend_count(points)
-    backwards = _backwards_distance(points)
-    collisions = _count_node_collisions(points, nodes, {source_node.node.id, target_node.node.id}, theme)
-
-    score = collisions * 100000 + backwards * 1000 + bends * 120 + length
-    if "outer" in kind:
-        score += 220 if direction == "forward" else 90
-    if kind == "direct_join":
-        score -= 25
-    if kind == "lane_join":
-        score += 30
-    if direction == "back":
-        score -= min(backwards, theme.route_track_gap)
-    return score
-
-
 def _build_forward_candidates(
     *,
     source_node: LayoutNode,
@@ -1092,6 +1225,8 @@ def _build_forward_candidates(
 
     if source_node.order == target_node.order:
         candidates.append(("direct", _direct_same_row_candidate(source_node, target_node, geometry, pair_offset, theme)))
+    else:
+        candidates.append(("direct_elbow", _direct_elbow_candidate(source_node, target_node, pair_offset)))
 
     if source_node.rank in geometry.gap_after_rank:
         for lane_x in _ordered_gap_positions(geometry.gap_after_rank[source_node.rank], theme, "start"):
@@ -1150,6 +1285,22 @@ def _direct_same_row_candidate(
         [
             (Point(split_x, y), "stub"),
             (Point(merge_x, y), "reserve"),
+            (target, "stub"),
+        ],
+    )
+
+
+def _direct_elbow_candidate(
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    pair_offset: float,
+) -> CandidatePath:
+    source = _right_port(source_node, pair_offset)
+    target = _vertical_port(target_node, pair_offset, source.y)
+    return _build_candidate(
+        source,
+        [
+            (Point(target.x, source.y), "reserve"),
             (target, "stub"),
         ],
     )
@@ -1405,43 +1556,313 @@ def _vertical_port(node: LayoutNode, pair_offset: float, lane_y: float) -> Point
     return Point(x, node.y)
 
 
-def _forward_score(
+def _select_candidate_with_priority(
+    evaluations: list[
+        tuple[
+            bool,
+            tuple[int, int, int, float, float, int, float, int, float, int],
+            CandidatePath,
+        ]
+    ],
+) -> CandidatePath | None:
+    for clearance_required in (True, False):
+        scoped = [item for item in evaluations if item[0] is clearance_required]
+        if not scoped:
+            continue
+        return min(scoped, key=lambda item: item[1])[2]
+    return None
+
+
+def _select_points_with_priority(
+    evaluations: list[tuple[bool, tuple[int, float, float, int, int], tuple[Point, ...]]],
+) -> tuple[Point, ...] | None:
+    for clearance_required in (True, False):
+        scoped = [item for item in evaluations if item[0] is clearance_required]
+        if not scoped:
+            continue
+        return min(scoped, key=lambda item: item[1])[2]
+    return None
+
+
+def _route_metrics(
+    candidate: CandidatePath,
+    *,
+    nodes: dict[str, LayoutNode],
+    ignored_node_ids: set[str],
+    theme: "Theme",
+) -> tuple[int, float, int, float]:
+    points = candidate.points
+    return (
+        _count_node_collisions(points, nodes, ignored_node_ids, theme),
+        _backwards_distance(points),
+        _bend_count(points),
+        _path_length(points),
+    )
+
+
+def _candidate_interaction_metrics(
+    candidate: CandidatePath,
+    *,
+    occupancy: Occupancy,
+    source_node_id: str,
+    target_node_id: str,
+    routing_groups: RoutingGroups | None,
+) -> InteractionMetrics:
+    return _path_interaction_metrics(
+        candidate.points,
+        occupancy=occupancy,
+        source_node_id=source_node_id,
+        target_node_id=target_node_id,
+        routing_groups=routing_groups,
+    )
+
+
+def _path_interaction_metrics(
+    points: tuple[Point, ...],
+    *,
+    occupancy: Occupancy,
+    source_node_id: str,
+    target_node_id: str,
+    routing_groups: RoutingGroups | None,
+) -> InteractionMetrics:
+    edge_crossings = 0
+    edge_overlap_length = 0.0
+
+    for start, end in zip(points, points[1:]):
+        segment_crossings, segment_overlap = _segment_interaction_metrics(start, end, occupancy)
+        edge_crossings += segment_crossings
+        edge_overlap_length += segment_overlap
+
+    obstacle_overlap_length = 0.0
+    obstacle_crossings = 0
+    for bounds in _obstacle_group_bounds(source_node_id, target_node_id, routing_groups):
+        for start, end in zip(points, points[1:]):
+            segment_overlap, segment_crossings = _segment_border_interactions(start, end, bounds)
+            obstacle_overlap_length += segment_overlap
+            obstacle_crossings += segment_crossings
+
+    return InteractionMetrics(
+        edge_crossings=edge_crossings,
+        edge_overlap_length=round(edge_overlap_length, 2),
+        obstacle_overlap_length=round(obstacle_overlap_length, 2),
+        obstacle_crossings=obstacle_crossings,
+    )
+
+
+def _segment_interaction_metrics(
+    start: Point,
+    end: Point,
+    occupancy: Occupancy,
+) -> tuple[int, float]:
+    crossings = 0
+    overlap_length = 0.0
+
+    if start.x == end.x:
+        x = round(start.x, 2)
+        top, bottom = sorted((start.y, end.y))
+        for segment in occupancy.vertical.get(x, ()):
+            overlap = min(bottom, segment.end) - max(top, segment.start)
+            if overlap > EPSILON:
+                overlap_length += overlap
+        for y, horizontal_segments in occupancy.horizontal.items():
+            if top + EPSILON < y < bottom - EPSILON:
+                for segment in horizontal_segments:
+                    if segment.start + EPSILON < x < segment.end - EPSILON:
+                        crossings += 1
+        return crossings, overlap_length
+
+    if start.y == end.y:
+        y = round(start.y, 2)
+        left, right = sorted((start.x, end.x))
+        for segment in occupancy.horizontal.get(y, ()):
+            overlap = min(right, segment.end) - max(left, segment.start)
+            if overlap > EPSILON:
+                overlap_length += overlap
+        for x, vertical_segments in occupancy.vertical.items():
+            if left + EPSILON < x < right - EPSILON:
+                for segment in vertical_segments:
+                    if segment.start + EPSILON < y < segment.end - EPSILON:
+                        crossings += 1
+        return crossings, overlap_length
+
+    return 1, 0.0
+
+
+def _obstacle_group_bounds(
+    source_node_id: str,
+    target_node_id: str,
+    routing_groups: RoutingGroups | None,
+) -> tuple[Bounds, ...]:
+    if routing_groups is None:
+        return ()
+    return tuple(routing_groups.bounds_by_id[group_id] for group_id in sorted(routing_groups.bounds_by_id))
+
+
+def _segment_border_interactions(
+    start: Point,
+    end: Point,
+    bounds: Bounds,
+) -> tuple[float, int]:
+    overlap_length = 0.0
+    crossings = 0
+
+    if start.x == end.x:
+        x = round(start.x, 2)
+        top, bottom = sorted((start.y, end.y))
+        if abs(x - bounds.x) <= EPSILON or abs(x - bounds.right) <= EPSILON:
+            overlap = min(bottom, bounds.bottom) - max(top, bounds.y)
+            if overlap > EPSILON:
+                overlap_length += overlap
+        if bounds.x + EPSILON < x < bounds.right - EPSILON and top + EPSILON < bounds.y < bottom - EPSILON:
+            crossings += 1
+        if bounds.x + EPSILON < x < bounds.right - EPSILON and top + EPSILON < bounds.bottom < bottom - EPSILON:
+            crossings += 1
+        return overlap_length, crossings
+
+    if start.y == end.y:
+        y = round(start.y, 2)
+        left, right = sorted((start.x, end.x))
+        if abs(y - bounds.y) <= EPSILON or abs(y - bounds.bottom) <= EPSILON:
+            overlap = min(right, bounds.right) - max(left, bounds.x)
+            if overlap > EPSILON:
+                overlap_length += overlap
+        if bounds.y + EPSILON < y < bounds.bottom - EPSILON and left + EPSILON < bounds.x < right - EPSILON:
+            crossings += 1
+        if bounds.y + EPSILON < y < bounds.bottom - EPSILON and left + EPSILON < bounds.right < right - EPSILON:
+            crossings += 1
+        return overlap_length, crossings
+
+    return 0.0, 1
+
+
+def _forward_priority_key(
     *,
     kind: str,
     candidate: CandidatePath,
+    candidate_index: int,
     source_node: LayoutNode,
     target_node: LayoutNode,
     nodes: dict[str, LayoutNode],
     outgoing_count: int,
     incoming_count: int,
     theme: "Theme",
-) -> float:
-    points = candidate.points
-    length = _path_length(points)
-    bends = _bend_count(points)
-    backwards = _backwards_distance(points)
-    collisions = _count_node_collisions(points, nodes, {source_node.node.id, target_node.node.id}, theme)
+    has_relevant_groups: bool,
+    interactions: InteractionMetrics,
+) -> tuple[int, int, int, float, float, int, float, int, float, int]:
+    collisions, backwards, bends, length = _route_metrics(
+        candidate,
+        nodes=nodes,
+        ignored_node_ids={source_node.node.id, target_node.node.id},
+        theme=theme,
+    )
+    return (
+        interactions.edge_crossings,
+        collisions,
+        _forward_side_change_penalty(kind, has_relevant_groups=has_relevant_groups),
+        interactions.edge_overlap_length,
+        interactions.obstacle_overlap_length,
+        interactions.obstacle_crossings,
+        _forward_kind_priority(
+            kind,
+            outgoing_count=outgoing_count,
+            incoming_count=incoming_count,
+            has_relevant_groups=has_relevant_groups,
+        ),
+        backwards,
+        bends,
+        length,
+        candidate_index,
+    )
 
-    score = collisions * 100000 + backwards * 1000 + bends * 120 + length
 
-    if kind.startswith("row_"):
-        score += 50
-    if kind == "outer_row":
-        score += 280
-    if kind == "outer_column":
-        score += 340
+def _forward_kind_priority(
+    kind: str,
+    *,
+    outgoing_count: int,
+    incoming_count: int,
+    has_relevant_groups: bool,
+) -> int:
+    fanout_context = outgoing_count > 1 and incoming_count <= 1
+    fanin_context = incoming_count > 1 and outgoing_count <= 1
+
     if kind == "direct":
-        score -= 30
-    if kind.endswith("source") and outgoing_count > 1:
-        score -= 90
-    if kind.endswith("target") and incoming_count > 1:
-        score -= 90
-    if kind.endswith("source") and incoming_count > 1:
-        score += 25
-    if kind.endswith("target") and outgoing_count > 1:
-        score += 25
+        return 0
+    if kind == "direct_elbow" and has_relevant_groups:
+        return 1
+    if fanout_context and kind == "column_source":
+        return 2
+    if fanout_context and kind == "row_source":
+        return 3
+    if fanin_context and kind == "column_target":
+        return 2
+    if fanin_context and kind == "row_target":
+        return 3
+    if kind in {"column_source", "column_target"}:
+        return 4
+    if kind in {"row_source", "row_target"}:
+        return 5
+    if kind == "direct_elbow":
+        return 6
+    if kind == "outer_row":
+        return 7
+    if kind == "outer_column":
+        return 8
+    return 9
 
-    return score
+
+def _forward_side_change_penalty(kind: str, *, has_relevant_groups: bool) -> int:
+    if kind in {"row_source", "row_target", "outer_row"}:
+        return 1
+    if kind == "direct_elbow" and not has_relevant_groups:
+        return 1
+    return 0
+
+
+def _edge_join_priority_key(
+    *,
+    kind: str,
+    candidate: CandidatePath,
+    candidate_index: int,
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    nodes: dict[str, LayoutNode],
+    theme: "Theme",
+    direction: str,
+    interactions: InteractionMetrics,
+) -> tuple[int, int, int, float, float, int, float, int, float, int]:
+    collisions, backwards, bends, length = _route_metrics(
+        candidate,
+        nodes=nodes,
+        ignored_node_ids={source_node.node.id, target_node.node.id},
+        theme=theme,
+    )
+    return (
+        interactions.edge_crossings,
+        collisions,
+        _edge_join_kind_priority(kind, direction=direction),
+        interactions.edge_overlap_length,
+        interactions.obstacle_overlap_length,
+        interactions.obstacle_crossings,
+        backwards,
+        bends,
+        length,
+        candidate_index,
+    )
+
+
+def _edge_join_kind_priority(kind: str, *, direction: str) -> int:
+    if kind == "direct_join":
+        return 0
+    if kind in {"row_join", "column_join"}:
+        return 1
+    if kind == "lane_join":
+        return 2
+    if kind in {"outer_row_join", "outer_column_join"}:
+        return 3
+    if kind == "outer_join":
+        return 4
+    # Keep residual ordering deterministic if new kinds are added later.
+    return 5 if direction == "forward" else 6
 
 
 def _candidate_conflicts(candidate: CandidatePath, occupancy: Occupancy) -> bool:
@@ -1488,6 +1909,25 @@ def _path_respects_group_clearance(
     return True
 
 
+def _relevant_group_bounds_for_optional_routing_groups(
+    source_node_id: str,
+    target_node_id: str,
+    routing_groups: RoutingGroups | None,
+    *,
+    include_shared: bool = False,
+    self_loop: bool = False,
+) -> tuple[Bounds, ...]:
+    if routing_groups is None:
+        return ()
+    return _relevant_group_bounds(
+        source_node_id,
+        target_node_id,
+        routing_groups,
+        include_shared=include_shared,
+        self_loop=self_loop,
+    )
+
+
 def _relevant_group_bounds(
     source_node_id: str,
     target_node_id: str,
@@ -1524,7 +1964,7 @@ def _shared_group_frame(
     shared_group_ids = source_groups & target_groups
 
     candidates = [
-        routing_groups.frames_by_id[group_id]
+        (group_id, routing_groups.frames_by_id[group_id])
         for group_id in shared_group_ids
         if group_id in routing_groups.frames_by_id
         and routing_groups.frames_by_id[group_id].header_top < routing_groups.frames_by_id[group_id].header_bottom - EPSILON
@@ -1532,14 +1972,14 @@ def _shared_group_frame(
     if not candidates:
         return None
 
-    return min(
+    _, frame = min(
         candidates,
-        key=lambda frame: (
-            frame.bounds.width * frame.bounds.height,
-            frame.bounds.width,
-            frame.bounds.height,
+        key=lambda item: (
+            -routing_groups.depth_by_id.get(item[0], 0),
+            item[1].bounds.width * item[1].bounds.height,
         ),
     )
+    return frame
 
 
 def _source_clearance_bounds(
@@ -1582,6 +2022,716 @@ def _target_clearance_bounds(
         for group_id in sorted(relevant_group_ids)
         if group_id in routing_groups.bounds_by_id
     )
+
+
+def _repair_forward_conflicts(
+    *,
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    nodes: dict[str, LayoutNode],
+    routed_by_id: dict[str, RoutedEdge],
+    ordered_node_edges: tuple["Edge", ...] | list["Edge"],
+    component_geometry: dict[int, ComponentGeometry],
+    pair_offsets: dict[str, float],
+    routing_groups: RoutingGroups | None,
+) -> None:
+    for _ in range(2):
+        changed = False
+
+        for edge in ordered_node_edges:
+            route = routed_by_id.get(edge.id)
+            if route is None or route.target_kind != "node":
+                continue
+
+            source_node = nodes[edge.source]
+            target_node = nodes[route.target_node_id]
+            if source_node.rank >= target_node.rank:
+                continue
+
+            occupancy = Occupancy()
+            for other_edge_id, other_route in routed_by_id.items():
+                if other_edge_id == edge.id:
+                    continue
+                if nodes[other_route.edge.source].component_id != source_node.component_id:
+                    continue
+                _reserve_points(occupancy, other_route.points, other_edge_id)
+
+            current_interactions = _path_interaction_metrics(
+                route.points,
+                occupancy=occupancy,
+                source_node_id=source_node.node.id,
+                target_node_id=target_node.node.id,
+                routing_groups=routing_groups,
+            )
+            current_key = (
+                current_interactions.edge_crossings,
+                current_interactions.edge_overlap_length,
+                current_interactions.obstacle_overlap_length,
+                current_interactions.obstacle_crossings,
+                _path_length(route.points),
+            )
+            if current_key[:4] == (0, 0.0, 0.0, 0):
+                continue
+
+            current_source_side = _point_side_on_node(route.points[0], source_node)
+            current_target_side = _point_side_on_node(route.points[-1], target_node)
+            geometry = component_geometry[source_node.component_id]
+            candidate_evaluations: list[tuple[bool, tuple[int, float, float, int, float], CandidatePath]] = []
+
+            for candidate in _same_side_forward_candidates(
+                source_node=source_node,
+                target_node=target_node,
+                geometry=geometry,
+                pair_offset=pair_offsets.get(edge.id, 0.0),
+                current_source_side=current_source_side,
+                current_target_side=current_target_side,
+                theme=validated.theme,
+            ):
+                clearance_ok = _path_respects_group_clearance(
+                    candidate.points,
+                    source_node.node.id,
+                    target_node.node.id,
+                    routing_groups,
+                )
+                interactions = _candidate_interaction_metrics(
+                    candidate,
+                    occupancy=occupancy,
+                    source_node_id=source_node.node.id,
+                    target_node_id=target_node.node.id,
+                    routing_groups=routing_groups,
+                )
+                candidate_key = (
+                    interactions.edge_crossings,
+                    interactions.edge_overlap_length,
+                    interactions.obstacle_overlap_length,
+                    interactions.obstacle_crossings,
+                    _path_length(candidate.points),
+                )
+                candidate_evaluations.append((clearance_ok, candidate_key, candidate))
+
+            replacement = _select_repair_candidate(candidate_evaluations)
+            if replacement is None:
+                continue
+
+            replacement_key = next(
+                key
+                for clearance_ok, key, candidate in candidate_evaluations
+                if candidate.points == replacement.points
+            )
+            if replacement_key >= current_key:
+                continue
+
+            route.points = replacement.points
+            route.bounds = _bounds_for_points(
+                replacement.points,
+                validated.theme.stroke_width,
+                validated.theme.arrow_size,
+                badge_radius=route.join_badge_radius,
+            )
+            changed = True
+
+        if not changed:
+            break
+
+
+def _same_side_forward_candidates(
+    *,
+    source_node: LayoutNode,
+    target_node: LayoutNode,
+    geometry: ComponentGeometry,
+    pair_offset: float,
+    current_source_side: str,
+    current_target_side: str,
+    theme: "Theme",
+) -> tuple[CandidatePath, ...]:
+    candidates: list[CandidatePath] = []
+
+    for _, candidate in _build_forward_candidates(
+        source_node=source_node,
+        target_node=target_node,
+        geometry=geometry,
+        pair_offset=pair_offset,
+        theme=theme,
+    ):
+        if _point_side_on_node(candidate.points[0], source_node) != current_source_side:
+            continue
+        if _point_side_on_node(candidate.points[-1], target_node) != current_target_side:
+            continue
+        candidates.append(candidate)
+
+    unique: dict[tuple[Point, ...], CandidatePath] = {}
+    for candidate in candidates:
+        unique.setdefault(candidate.points, candidate)
+    return tuple(unique.values())
+
+
+def _select_repair_candidate(
+    evaluations: list[tuple[bool, tuple[int, float, float, int, float], CandidatePath]],
+) -> CandidatePath | None:
+    for clearance_required in (True, False):
+        scoped = [item for item in evaluations if item[0] is clearance_required]
+        if not scoped:
+            continue
+        return min(scoped, key=lambda item: item[1])[2]
+    return None
+
+
+def _separate_overlapping_endpoints(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    nodes: dict[str, LayoutNode],
+    routed_by_id: dict[str, RoutedEdge],
+) -> None:
+    descriptors = _endpoint_access_descriptors(validated, nodes, routed_by_id)
+    grouped: dict[tuple[str, str, str], list[EndpointAccessDescriptor]] = defaultdict(list)
+
+    for descriptor in descriptors:
+        grouped[(descriptor.node_id, descriptor.side, descriptor.endpoint_kind)].append(descriptor)
+
+    translations = _endpoint_translations(routed_by_id)
+    for cluster_descriptors in grouped.values():
+        if not cluster_descriptors or cluster_descriptors[0].endpoint_kind != "target" or len(cluster_descriptors) <= 1:
+            continue
+        _apply_endpoint_cluster_spread(
+            validated,
+            nodes,
+            routed_by_id,
+            translations,
+            tuple(cluster_descriptors),
+        )
+    _commit_endpoint_translations(validated, routed_by_id, translations)
+
+    descriptors = _endpoint_access_descriptors(validated, nodes, routed_by_id)
+    grouped = defaultdict(list)
+    for descriptor in descriptors:
+        grouped[(descriptor.node_id, descriptor.side, descriptor.endpoint_kind)].append(descriptor)
+
+    translations = _endpoint_translations(routed_by_id)
+    for cluster_descriptors in grouped.values():
+        for component in _touching_endpoint_components(cluster_descriptors):
+            if len(component) <= 1:
+                continue
+            _apply_endpoint_cluster_spread(
+                validated,
+                nodes,
+                routed_by_id,
+                translations,
+                component,
+            )
+    _commit_endpoint_translations(validated, routed_by_id, translations)
+
+    descriptors = _endpoint_access_descriptors(validated, nodes, routed_by_id)
+    translations = _endpoint_translations(routed_by_id)
+    for component in _overlapping_endpoint_components(list(descriptors)):
+        if len(component) <= 1:
+            continue
+        _apply_endpoint_cluster_spread(
+            validated,
+            nodes,
+            routed_by_id,
+            translations,
+            component,
+        )
+    _commit_endpoint_translations(validated, routed_by_id, translations)
+
+    descriptors = _endpoint_access_descriptors(validated, nodes, routed_by_id)
+    translations = _endpoint_translations(routed_by_id)
+    for component in _crossing_endpoint_components(list(descriptors)):
+        if len(component) <= 1:
+            continue
+        _apply_endpoint_cluster_spread(
+            validated,
+            nodes,
+            routed_by_id,
+            translations,
+            component,
+        )
+    _commit_endpoint_translations(validated, routed_by_id, translations)
+
+
+def _endpoint_translations(
+    routed_by_id: dict[str, RoutedEdge],
+) -> dict[str, list[tuple[float, float]]]:
+    return {
+        edge_id: [(0.0, 0.0) for _ in route.points]
+        for edge_id, route in routed_by_id.items()
+    }
+
+
+def _commit_endpoint_translations(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    routed_by_id: dict[str, RoutedEdge],
+    translations: dict[str, list[tuple[float, float]]],
+) -> None:
+    for edge_id, route in routed_by_id.items():
+        translated_points = _translate_route_points(route.points, translations[edge_id])
+        if translated_points == route.points:
+            continue
+        route.points = translated_points
+        route.bounds = _bounds_for_points(
+            translated_points,
+            validated.theme.stroke_width,
+            validated.theme.arrow_size,
+            badge_radius=route.join_badge_radius,
+        )
+
+
+def _endpoint_access_descriptors(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    nodes: dict[str, LayoutNode],
+    routed_by_id: dict[str, RoutedEdge],
+) -> tuple[EndpointAccessDescriptor, ...]:
+    descriptors: list[EndpointAccessDescriptor] = []
+
+    for edge in validated.edges:
+        route = routed_by_id[edge.id]
+        source_node = nodes[edge.source]
+        source_side = _point_side_on_node(route.points[0], source_node)
+        source_end_index = _source_access_lane_end_index(route.points)
+        descriptors.append(
+            EndpointAccessDescriptor(
+                edge_id=edge.id,
+                node_id=edge.source,
+                endpoint_kind="source",
+                side=source_side,
+                axis=_side_tangent_axis(source_side),
+                lane_start_index=0,
+                lane_end_index=source_end_index,
+                lane_start=route.points[0],
+                lane_end=route.points[source_end_index],
+                approach_point=None,
+            )
+        )
+
+        if route.target_kind != "node":
+            continue
+
+        target_node = nodes[route.target_node_id]
+        target_side = _point_side_on_node(route.points[-1], target_node)
+        target_start_index = _target_access_lane_start_index(route.points)
+        descriptors.append(
+            EndpointAccessDescriptor(
+                edge_id=edge.id,
+                node_id=route.target_node_id,
+                endpoint_kind="target",
+                side=target_side,
+                axis=_side_tangent_axis(target_side),
+                lane_start_index=target_start_index,
+                lane_end_index=len(route.points) - 1,
+                lane_start=route.points[target_start_index],
+                lane_end=route.points[-1],
+                approach_point=route.points[target_start_index - 1] if target_start_index > 0 else None,
+            )
+        )
+
+    return tuple(descriptors)
+
+
+def _point_side_on_node(point: Point, node: LayoutNode) -> str:
+    if abs(point.x - node.x) <= EPSILON:
+        return "left"
+    if abs(point.x - node.right) <= EPSILON:
+        return "right"
+    if abs(point.y - node.y) <= EPSILON:
+        return "top"
+    if abs(point.y - node.bounds.bottom) <= EPSILON:
+        return "bottom"
+
+    distances = {
+        "left": abs(point.x - node.x),
+        "right": abs(point.x - node.right),
+        "top": abs(point.y - node.y),
+        "bottom": abs(point.y - node.bounds.bottom),
+    }
+    return min(distances, key=distances.get)
+
+
+def _side_tangent_axis(side: str) -> str:
+    if side in {"left", "right"}:
+        return "y"
+    return "x"
+
+
+def _source_access_lane_end_index(points: tuple[Point, ...]) -> int:
+    if len(points) <= 1:
+        return 0
+    first_orientation = _segment_direction(points[0], points[1])
+    if first_orientation is None:
+        return 1
+
+    end_index = 1
+    for segment_index, (start, end) in enumerate(zip(points[1:], points[2:]), start=1):
+        if _segment_direction(start, end) != first_orientation:
+            break
+        end_index = segment_index + 1
+    return end_index
+
+
+def _target_access_lane_start_index(points: tuple[Point, ...]) -> int:
+    if len(points) <= 1:
+        return 0
+    last_orientation = _segment_direction(points[-2], points[-1])
+    if last_orientation is None:
+        return len(points) - 2
+
+    start_index = len(points) - 2
+    for segment_index in range(len(points) - 3, -1, -1):
+        if _segment_direction(points[segment_index], points[segment_index + 1]) != last_orientation:
+            break
+        start_index = segment_index
+    return start_index
+
+
+def _overlapping_endpoint_components(
+    descriptors: list[EndpointAccessDescriptor],
+) -> tuple[tuple[EndpointAccessDescriptor, ...], ...]:
+    return _endpoint_components(descriptors, _endpoint_lanes_overlap)
+
+
+def _touching_endpoint_components(
+    descriptors: list[EndpointAccessDescriptor],
+) -> tuple[tuple[EndpointAccessDescriptor, ...], ...]:
+    return _endpoint_components(descriptors, _endpoint_lanes_touch_or_overlap)
+
+
+def _endpoint_components(
+    descriptors: list[EndpointAccessDescriptor],
+    related: "Callable[[EndpointAccessDescriptor, EndpointAccessDescriptor], bool]",
+) -> tuple[tuple[EndpointAccessDescriptor, ...], ...]:
+    if len(descriptors) <= 1:
+        return ()
+
+    adjacency: dict[tuple[str, str], set[tuple[str, str]]] = {
+        _endpoint_descriptor_key(descriptor): set()
+        for descriptor in descriptors
+    }
+    descriptor_by_id = {
+        _endpoint_descriptor_key(descriptor): descriptor
+        for descriptor in descriptors
+    }
+
+    for index, first in enumerate(descriptors):
+        for second in descriptors[index + 1 :]:
+            if related(first, second):
+                first_key = _endpoint_descriptor_key(first)
+                second_key = _endpoint_descriptor_key(second)
+                adjacency[first_key].add(second_key)
+                adjacency[second_key].add(first_key)
+
+    components: list[tuple[EndpointAccessDescriptor, ...]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for descriptor in descriptors:
+        descriptor_key = _endpoint_descriptor_key(descriptor)
+        if descriptor_key in seen or not adjacency[descriptor_key]:
+            continue
+        queue = [descriptor_key]
+        seen.add(descriptor_key)
+        members: list[EndpointAccessDescriptor] = []
+        while queue:
+            current_key = queue.pop()
+            members.append(descriptor_by_id[current_key])
+            for neighbor in adjacency[current_key]:
+                if neighbor in seen:
+                    continue
+                seen.add(neighbor)
+                queue.append(neighbor)
+        components.append(tuple(members))
+
+    return tuple(components)
+
+
+def _crossing_endpoint_components(
+    descriptors: list[EndpointAccessDescriptor],
+) -> tuple[tuple[EndpointAccessDescriptor, ...], ...]:
+    if len(descriptors) <= 1:
+        return ()
+
+    adjacency: dict[tuple[str, str], set[tuple[str, str]]] = {
+        _endpoint_descriptor_key(descriptor): set()
+        for descriptor in descriptors
+    }
+    descriptor_by_id = {
+        _endpoint_descriptor_key(descriptor): descriptor
+        for descriptor in descriptors
+    }
+
+    for index, first in enumerate(descriptors):
+        for second in descriptors[index + 1 :]:
+            if _endpoint_lanes_cross(first, second):
+                first_key = _endpoint_descriptor_key(first)
+                second_key = _endpoint_descriptor_key(second)
+                adjacency[first_key].add(second_key)
+                adjacency[second_key].add(first_key)
+
+    components: list[tuple[EndpointAccessDescriptor, ...]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for descriptor in descriptors:
+        descriptor_key = _endpoint_descriptor_key(descriptor)
+        if descriptor_key in seen or not adjacency[descriptor_key]:
+            continue
+        queue = [descriptor_key]
+        seen.add(descriptor_key)
+        members: list[EndpointAccessDescriptor] = []
+        while queue:
+            current_key = queue.pop()
+            members.append(descriptor_by_id[current_key])
+            for neighbor in adjacency[current_key]:
+                if neighbor in seen:
+                    continue
+                seen.add(neighbor)
+                queue.append(neighbor)
+        components.append(tuple(members))
+
+    return tuple(components)
+
+
+def _endpoint_lanes_overlap(
+    first: EndpointAccessDescriptor,
+    second: EndpointAccessDescriptor,
+) -> bool:
+    return _endpoint_lanes_touch_or_overlap(first, second, strict=True)
+
+
+def _endpoint_lanes_touch_or_overlap(
+    first: EndpointAccessDescriptor,
+    second: EndpointAccessDescriptor,
+    *,
+    strict: bool = False,
+) -> bool:
+    if first.axis != second.axis:
+        return False
+    if first.axis == "y":
+        if abs(first.lane_start.y - second.lane_start.y) > EPSILON or abs(first.lane_end.y - second.lane_end.y) > EPSILON:
+            return False
+        first_left, first_right = sorted((first.lane_start.x, first.lane_end.x))
+        second_left, second_right = sorted((second.lane_start.x, second.lane_end.x))
+        overlap = min(first_right, second_right) - max(first_left, second_left)
+        return overlap > EPSILON if strict else overlap >= -EPSILON
+
+    if abs(first.lane_start.x - second.lane_start.x) > EPSILON or abs(first.lane_end.x - second.lane_end.x) > EPSILON:
+        return False
+    first_top, first_bottom = sorted((first.lane_start.y, first.lane_end.y))
+    second_top, second_bottom = sorted((second.lane_start.y, second.lane_end.y))
+    overlap = min(first_bottom, second_bottom) - max(first_top, second_top)
+    return overlap > EPSILON if strict else overlap >= -EPSILON
+
+
+def _endpoint_descriptor_key(descriptor: EndpointAccessDescriptor) -> tuple[str, str]:
+    return descriptor.edge_id, descriptor.endpoint_kind
+
+
+def _endpoint_lanes_cross(
+    first: EndpointAccessDescriptor,
+    second: EndpointAccessDescriptor,
+) -> bool:
+    first_direction = _segment_direction(first.lane_start, first.lane_end)
+    second_direction = _segment_direction(second.lane_start, second.lane_end)
+    if first_direction is None or second_direction is None or first_direction == second_direction:
+        return False
+
+    if first_direction == "h":
+        horizontal = first
+        vertical = second
+    else:
+        horizontal = second
+        vertical = first
+
+    y = horizontal.lane_start.y
+    x = vertical.lane_start.x
+    horizontal_left, horizontal_right = sorted((horizontal.lane_start.x, horizontal.lane_end.x))
+    vertical_top, vertical_bottom = sorted((vertical.lane_start.y, vertical.lane_end.y))
+
+    return (
+        horizontal_left + EPSILON < x < horizontal_right - EPSILON
+        and vertical_top + EPSILON < y < vertical_bottom - EPSILON
+    )
+
+
+def _apply_endpoint_cluster_spread(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    nodes: dict[str, LayoutNode],
+    routed_by_id: dict[str, RoutedEdge],
+    translations: dict[str, list[tuple[float, float]]],
+    descriptors: tuple[EndpointAccessDescriptor, ...],
+) -> None:
+    sample = descriptors[0]
+    node = nodes[sample.node_id]
+    side_span = node.height if sample.side in {"left", "right"} else node.width
+    spread_gap = min(validated.theme.route_track_gap * 0.4, side_span / 4)
+    ordered = sorted(
+        descriptors,
+        key=lambda descriptor: _endpoint_spread_order_key(validated, nodes, routed_by_id[descriptor.edge_id], descriptor),
+    )
+
+    target_coordinates: list[float] | None = None
+    offsets: list[float] | None = None
+    if sample.endpoint_kind == "target":
+        target_coordinates = _target_cluster_slot_coordinates(
+            ordered=ordered,
+            node=node,
+            nodes=nodes,
+            routed_by_id=routed_by_id,
+            gap=spread_gap if spread_gap > 0 else 0.0,
+        )
+    else:
+        offsets = _centered_offsets(len(ordered), spread_gap if spread_gap > 0 else 0.0)
+
+    for index, descriptor in enumerate(ordered):
+        if target_coordinates is not None:
+            delta = round(target_coordinates[index] - _descriptor_tangent_coordinate(descriptor), 2)
+            shift = (0.0, delta) if descriptor.axis == "y" else (delta, 0.0)
+        else:
+            assert offsets is not None
+            offset = offsets[index]
+            shift = (0.0, offset) if descriptor.axis == "y" else (offset, 0.0)
+        for point_index in range(descriptor.lane_start_index, descriptor.lane_end_index + 1):
+            current_x, current_y = translations[descriptor.edge_id][point_index]
+            translations[descriptor.edge_id][point_index] = (
+                round(current_x + shift[0], 2),
+                round(current_y + shift[1], 2),
+            )
+
+
+def _endpoint_spread_order_key(
+    validated: "ValidatedPipeline | ValidatedDetailPanel",
+    nodes: dict[str, LayoutNode],
+    route: RoutedEdge,
+    descriptor: EndpointAccessDescriptor,
+) -> tuple[float, int, int, int]:
+    if descriptor.endpoint_kind == "source":
+        peer_node = nodes[route.target_node_id]
+        return (
+            float(peer_node.order),
+            peer_node.rank,
+            0,
+            validated.edge_index[descriptor.edge_id],
+        )
+
+    source_node = nodes[route.edge.source]
+    return (
+        _target_approach_depth_priority(descriptor),
+        source_node.order,
+        source_node.rank,
+        validated.edge_index[descriptor.edge_id],
+    )
+
+
+def _target_approach_depth_priority(descriptor: EndpointAccessDescriptor) -> float:
+    if descriptor.side == "top":
+        return descriptor.lane_start.y
+    if descriptor.side == "bottom":
+        return -descriptor.lane_start.y
+    if descriptor.side == "left":
+        return descriptor.lane_start.x
+    return -descriptor.lane_start.x
+
+
+def _descriptor_tangent_coordinate(descriptor: EndpointAccessDescriptor) -> float:
+    if descriptor.axis == "y":
+        return descriptor.lane_end.y
+    return descriptor.lane_end.x
+
+
+def _target_cluster_slot_coordinates(
+    *,
+    ordered: list[EndpointAccessDescriptor],
+    node: LayoutNode,
+    nodes: dict[str, LayoutNode],
+    routed_by_id: dict[str, RoutedEdge],
+    gap: float,
+) -> list[float]:
+    side = ordered[0].side
+    center = _node_side_center_coordinate(node, side)
+    outward_sign = _target_cluster_outward_sign(
+        descriptors=ordered,
+        node=node,
+        nodes=nodes,
+        routed_by_id=routed_by_id,
+    )
+    offsets = _center_out_offsets(len(ordered), gap, outward_sign)
+    return [_clamp_side_coordinate(node, side, round(center + offset, 2)) for offset in offsets]
+
+
+def _node_side_center_coordinate(node: LayoutNode, side: str) -> float:
+    if side in {"left", "right"}:
+        return round(node.center_y, 2)
+    return round(node.center_x, 2)
+
+
+def _target_cluster_outward_sign(
+    *,
+    descriptors: list[EndpointAccessDescriptor],
+    node: LayoutNode,
+    nodes: dict[str, LayoutNode],
+    routed_by_id: dict[str, RoutedEdge],
+) -> float:
+    side = descriptors[0].side
+    deltas: list[float] = []
+
+    for descriptor in descriptors:
+        if descriptor.approach_point is None:
+            continue
+        if side in {"top", "bottom"}:
+            delta = descriptor.lane_start.x - descriptor.approach_point.x
+        else:
+            delta = descriptor.lane_start.y - descriptor.approach_point.y
+        if abs(delta) > EPSILON:
+            deltas.append(delta)
+
+    if deltas:
+        average_delta = sum(deltas) / len(deltas)
+        if average_delta > EPSILON:
+            return -1.0
+        if average_delta < -EPSILON:
+            return 1.0
+
+    if side in {"top", "bottom"}:
+        average_source = sum(
+            nodes[routed_by_id[descriptor.edge_id].edge.source].center_x
+            for descriptor in descriptors
+        ) / len(descriptors)
+        return -1.0 if average_source <= node.center_x else 1.0
+
+    average_source = sum(
+        nodes[routed_by_id[descriptor.edge_id].edge.source].center_y
+        for descriptor in descriptors
+    ) / len(descriptors)
+    return -1.0 if average_source <= node.center_y else 1.0
+
+
+def _center_out_offsets(count: int, gap: float, outward_sign: float) -> list[float]:
+    if count <= 0:
+        return []
+
+    direction = outward_sign if abs(outward_sign) > EPSILON else -1.0
+    offsets = [0.0]
+    step = 1
+    while len(offsets) < count:
+        offsets.append(round(direction * gap * step, 2))
+        if len(offsets) >= count:
+            break
+        offsets.append(round(-direction * gap * step, 2))
+        step += 1
+    return offsets
+
+
+def _clamp_side_coordinate(node: LayoutNode, side: str, coordinate: float) -> float:
+    if side in {"top", "bottom"}:
+        low, high = node.x, node.right
+    else:
+        low, high = node.y, node.bounds.bottom
+    return round(min(max(coordinate, low), high), 2)
+
+
+def _translate_route_points(
+    points: tuple[Point, ...],
+    translations: list[tuple[float, float]],
+) -> tuple[Point, ...]:
+    shifted = tuple(
+        Point(round(point.x + dx, 2), round(point.y + dy, 2))
+        for point, (dx, dy) in zip(points, translations, strict=True)
+    )
+    return _collapse_points(shifted)
 
 
 def _bend_points(points: tuple[Point, ...]) -> tuple[Point, ...]:
@@ -1705,8 +2855,7 @@ def _select_back_edge_route(
     routing_groups: RoutingGroups | None,
     theme: "Theme",
 ) -> tuple[Point, ...]:
-    best_points: tuple[Point, ...] | None = None
-    fallback_points: tuple[Point, ...] | None = None
+    evaluations: list[tuple[bool, tuple[int, float, float, int, int], tuple[Point, ...]]] = []
 
     for slot in range(base_slot, base_slot + 8):
         points = _route_back_edge(
@@ -1718,22 +2867,32 @@ def _select_back_edge_route(
             routing_groups=routing_groups,
             theme=theme,
         )
-        best_points = points
-        if not _path_respects_group_clearance(
+        clearance_ok = _path_respects_group_clearance(
             points,
             source_node.node.id,
             target_node.node.id,
             routing_groups,
-        ):
-            continue
-        if fallback_points is None:
-            fallback_points = points
-        if not _points_conflict(points, occupancy):
-            return points
+        )
+        interactions = _path_interaction_metrics(
+            points,
+            occupancy=occupancy,
+            source_node_id=source_node.node.id,
+            target_node_id=target_node.node.id,
+            routing_groups=routing_groups,
+        )
+        priority_key = (
+            interactions.edge_crossings,
+            interactions.edge_overlap_length,
+            interactions.obstacle_overlap_length,
+            interactions.obstacle_crossings,
+            slot,
+        )
+        evaluations.append((clearance_ok, priority_key, points))
 
-    if fallback_points is not None:
-        return fallback_points
-    raise AssertionError("No group-clear back-edge route found.")
+    selected = _select_points_with_priority(evaluations)
+    if selected is not None:
+        return selected
+    raise AssertionError("No back-edge route found.")
 
 
 def _select_self_loop_route(
@@ -1746,8 +2905,7 @@ def _select_self_loop_route(
     routing_groups: RoutingGroups | None,
     theme: "Theme",
 ) -> tuple[Point, ...]:
-    best_points: tuple[Point, ...] | None = None
-    fallback_points: tuple[Point, ...] | None = None
+    evaluations: list[tuple[bool, tuple[int, float, float, int, int], tuple[Point, ...]]] = []
 
     for slot in range(base_slot, base_slot + 8):
         points = _route_self_loop(
@@ -1758,23 +2916,34 @@ def _select_self_loop_route(
             routing_groups,
             theme,
         )
-        best_points = points
-        if not _path_respects_group_clearance(
+        clearance_ok = _path_respects_group_clearance(
             points,
             source_node.node.id,
             source_node.node.id,
             routing_groups,
             self_loop=True,
-        ):
-            continue
-        if fallback_points is None:
-            fallback_points = points
-        if not _points_conflict(points, occupancy):
-            return points
+        )
+        interactions = _path_interaction_metrics(
+            points,
+            occupancy=occupancy,
+            source_node_id=source_node.node.id,
+            target_node_id=source_node.node.id,
+            routing_groups=routing_groups,
+        )
+        priority_key = (
+            interactions.edge_crossings,
+            interactions.edge_overlap_length,
+            interactions.obstacle_overlap_length,
+            interactions.obstacle_crossings,
+            slot,
+        )
+        evaluations.append((clearance_ok, priority_key, points))
 
-    if fallback_points is not None:
-        return fallback_points
-    raise AssertionError("No group-clear self-loop route found.")
+    selected = _select_points_with_priority(evaluations)
+    if selected is not None:
+        return selected
+
+    raise AssertionError("No self-loop route found.")
 
 
 def _route_back_edge(

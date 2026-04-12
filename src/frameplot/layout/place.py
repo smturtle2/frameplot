@@ -13,6 +13,8 @@ def place_nodes(
     order: dict[str, int],
     *,
     rank_gap_overrides: dict[tuple[int, int], float] | None = None,
+    row_gap_overrides: dict[tuple[int, int], float] | None = None,
+    row_gap_floor: float | None = None,
 ) -> dict[str, LayoutNode]:
     components = _weak_components(validated)
     placed: dict[str, LayoutNode] = {}
@@ -41,6 +43,9 @@ def place_nodes(
             validated,
             component_nodes,
             local_rows,
+            component_id=component_id,
+            overrides=row_gap_overrides,
+            row_gap_floor=row_gap_floor,
         )
         column_widths = {
             rank: max(measurements[node_id].width for node_id in nodes)
@@ -132,41 +137,18 @@ def _row_gap_after(
     validated: "ValidatedPipeline | ValidatedDetailPanel",
     component_nodes: tuple[str, ...],
     rows: dict[str, int],
+    *,
+    component_id: int,
+    overrides: dict[tuple[int, int], float] | None,
+    row_gap_floor: float | None,
 ) -> dict[int, float]:
     row_ids = sorted({rows[node_id] for node_id in component_nodes})
-    crossing_counts = {row: 0 for row in row_ids[:-1]}
-    component_set = set(component_nodes)
-
-    node_padding = {}
-    if hasattr(validated, "groups"):
-        for group in validated.groups:
-            for node_id in group.node_ids:
-                node_padding[node_id] = validated.theme.group_padding
-
-    row_padding: dict[int, float] = {}
-    for row in row_ids:
-        nodes_in_row = [n for n in component_nodes if rows[n] == row]
-        row_padding[row] = max((node_padding.get(n, 0.0) for n in nodes_in_row), default=0.0)
-
-    for edge in validated.edges:
-        target_node_id = validated.edge_targets[edge.id].node_id
-        if edge.source not in component_set or target_node_id not in component_set:
-            continue
-        source_row = rows[edge.source]
-        target_row = rows[target_node_id]
-        if source_row == target_row:
-            continue
-        for row in range(min(source_row, target_row), max(source_row, target_row)):
-            crossing_counts[row] = crossing_counts.get(row, 0) + 1
-
+    base_gap = _base_row_gap(validated.theme) if row_gap_floor is None else row_gap_floor
     gap_after: dict[int, float] = {}
-    for i, row in enumerate(row_ids[:-1]):
-        lanes = crossing_counts.get(row, 0)
-        padding_add = row_padding[row] + row_padding[row_ids[i+1]]
+    for row in row_ids[:-1]:
+        override_key = (component_id, row)
         gap_after[row] = round(
-            _base_row_gap(validated.theme)
-            + max(0, lanes - 1) * validated.theme.route_track_gap
-            + padding_add,
+            max(base_gap, overrides.get(override_key, base_gap)) if overrides is not None else base_gap,
             2,
         )
     return gap_after

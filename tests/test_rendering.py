@@ -8,14 +8,53 @@ from types import SimpleNamespace
 import pytest
 
 from frameplot import DetailPanel, Edge, Group, Node, Pipeline, Theme
-from frameplot.layout import build_layout
-from frameplot.layout.route import _build_component_geometry, _route_forward
-from frameplot.layout.types import LayoutNode, Point
+from frameplot.layout import _row_gap_overrides, build_layout
+from frameplot.layout.route import (
+    _bounds_for_points,
+    _build_component_geometry,
+    _route_forward,
+    _separate_overlapping_endpoints,
+)
+from frameplot.layout.types import Bounds, LayoutNode, Point, RoutedEdge
+from frameplot.layout.validate import validate_pipeline
 from frameplot.render.png import PNG_SIGNATURE
 from frameplot.render.png import DEFAULT_PNG_SCALE
 from frameplot.theme import resolve_theme_metrics
 
 SVG_NS = {"svg": "http://www.w3.org/2000/svg"}
+
+
+def _build_generate_pipeline_fixture() -> Pipeline:
+    namespace = runpy.run_path(str(Path(__file__).resolve().parents[1] / "test" / "generate_pipeline.py"))
+    return namespace["build_pipeline"]()
+
+
+def _make_layout_node(
+    node_id: str,
+    *,
+    x: float,
+    y: float,
+    width: float = 120.0,
+    height: float = 80.0,
+    rank: int = 0,
+    order: int = 0,
+) -> LayoutNode:
+    node = Node(node_id, node_id.title())
+    return LayoutNode(
+        node=node,
+        rank=rank,
+        order=order,
+        component_id=0,
+        width=width,
+        height=height,
+        x=x,
+        y=y,
+        title_lines=(node.title,),
+        subtitle_lines=(),
+        title_line_height=20.0,
+        subtitle_line_height=16.0,
+        content_height=20.0,
+    )
 
 
 def _bend_points(points) -> list[object]:
@@ -79,6 +118,69 @@ def _segment_overlaps(points_a, points_b) -> list[tuple[str, float]]:
     return overlaps
 
 
+def _segment_direction(start, end) -> str | None:
+    if start.x == end.x and start.y != end.y:
+        return "v"
+    if start.y == end.y and start.x != end.x:
+        return "h"
+    return None
+
+
+def _source_access_segment(points):
+    if len(points) < 2:
+        return points[0], points[0]
+    direction = _segment_direction(points[0], points[1])
+    end_index = 1
+    for segment_index, (start, end) in enumerate(zip(points[1:], points[2:]), start=1):
+        if _segment_direction(start, end) != direction:
+            break
+        end_index = segment_index + 1
+    return points[0], points[end_index]
+
+
+def _target_access_segment(points):
+    if len(points) < 2:
+        return points[-1], points[-1]
+    direction = _segment_direction(points[-2], points[-1])
+    start_index = len(points) - 2
+    for segment_index in range(len(points) - 3, -1, -1):
+        if _segment_direction(points[segment_index], points[segment_index + 1]) != direction:
+            break
+        start_index = segment_index
+    return points[start_index], points[-1]
+
+
+def _collinear_overlap_length(start_a, end_a, start_b, end_b) -> float:
+    if start_a.x == end_a.x == start_b.x == end_b.x:
+        if start_a.x != start_b.x:
+            return 0.0
+        return max(
+            0.0,
+            min(max(start_a.y, end_a.y), max(start_b.y, end_b.y))
+            - max(min(start_a.y, end_a.y), min(start_b.y, end_b.y)),
+        )
+    if start_a.y == end_a.y == start_b.y == end_b.y:
+        if start_a.y != start_b.y:
+            return 0.0
+        return max(
+            0.0,
+            min(max(start_a.x, end_a.x), max(start_b.x, end_b.x))
+            - max(min(start_a.x, end_a.x), min(start_b.x, end_b.x)),
+        )
+    return 0.0
+
+
+def _make_routed_edge(edge: Edge, points: tuple[Point, ...], theme: Theme) -> RoutedEdge:
+    return RoutedEdge(
+        edge=edge,
+        points=points,
+        bounds=_bounds_for_points(points, theme.stroke_width, theme.arrow_size),
+        stroke=edge.color or theme.edge_color,
+        target_kind="node",
+        target_node_id=edge.target,
+    )
+
+
 def _segment_crossings(points_a, points_b) -> list[tuple[float, float]]:
     crossings: list[tuple[float, float]] = []
 
@@ -104,6 +206,12 @@ def _segment_crossings(points_a, points_b) -> list[tuple[float, float]]:
     return crossings
 
 
+def _row_gap_between_rows(nodes: dict[str, LayoutNode], upper_row: int, lower_row: int) -> float:
+    upper_bottom = max(node.bounds.bottom for node in nodes.values() if node.order == upper_row)
+    lower_top = min(node.y for node in nodes.values() if node.order == lower_row)
+    return round(lower_top - upper_bottom, 2)
+
+
 def _point_on_segment(point, start, end) -> bool:
     if start.x == end.x == point.x:
         top, bottom = sorted((start.y, end.y))
@@ -112,6 +220,96 @@ def _point_on_segment(point, start, end) -> bool:
         left, right = sorted((start.x, end.x))
         return left <= point.x <= right
     return False
+
+
+def _build_detail_row_gap_fixture() -> Pipeline:
+    return Pipeline(
+        nodes=[Node("focus", "Focus")],
+        edges=[],
+        detail_panel=DetailPanel(
+            "detail",
+            "focus",
+            "Expanded Focus",
+            nodes=(
+                Node("shared", "Shared"),
+                Node("upper", "Upper"),
+                Node("lower", "Lower"),
+                Node("upper_out", "Upper Out"),
+                Node("lower_out", "Lower Out"),
+            ),
+            edges=(
+                Edge("d1", "shared", "upper"),
+                Edge("d2", "shared", "lower"),
+                Edge("d3", "upper", "upper_out"),
+                Edge("d4", "lower", "lower_out"),
+            ),
+        ),
+    )
+
+
+def _build_nested_group_fixture() -> Pipeline:
+    return Pipeline(
+        nodes=[
+            Node("top_left", "Top Left"),
+            Node("top_mid", "Top Mid"),
+            Node("top_right", "Top Right"),
+            Node("bottom_left", "Bottom Left"),
+            Node("bottom_mid", "Bottom Mid"),
+            Node("bottom_right", "Bottom Right"),
+        ],
+        edges=[
+            Edge("e1", "top_left", "top_mid"),
+            Edge("e2", "top_mid", "top_right"),
+            Edge("e3", "bottom_left", "bottom_mid"),
+            Edge("e4", "bottom_mid", "bottom_right"),
+        ],
+        groups=[
+            Group(
+                "parent",
+                "Parent",
+                ("top_left", "top_mid", "top_right", "bottom_left", "bottom_mid", "bottom_right"),
+            ),
+            Group(
+                "child",
+                "Child",
+                ("bottom_mid",),
+            ),
+        ],
+    )
+
+
+def _build_nested_detail_panel_fixture() -> Pipeline:
+    return Pipeline(
+        nodes=[Node("focus", "Focus")],
+        edges=[],
+        detail_panel=DetailPanel(
+            "detail",
+            "focus",
+            "Expanded Focus",
+            nodes=(
+                Node("top_left", "Top Left"),
+                Node("top_mid", "Top Mid"),
+                Node("top_right", "Top Right"),
+                Node("bottom_left", "Bottom Left"),
+                Node("bottom_mid", "Bottom Mid"),
+                Node("bottom_right", "Bottom Right"),
+            ),
+            edges=(
+                Edge("d1", "top_left", "top_mid"),
+                Edge("d2", "top_mid", "top_right"),
+                Edge("d3", "bottom_left", "bottom_mid"),
+                Edge("d4", "bottom_mid", "bottom_right"),
+            ),
+            groups=(
+                Group(
+                    "parent",
+                    "Parent",
+                    ("top_left", "top_mid", "top_right", "bottom_left", "bottom_mid", "bottom_right"),
+                ),
+                Group("child", "Child", ("bottom_mid",)),
+            ),
+        ),
+    )
 
 
 def _path_points(path_data: str) -> tuple[Point, ...]:
@@ -407,6 +605,110 @@ def test_adjacent_groups_keep_visible_gap_between_group_overlays() -> None:
     assert right.x - left.right == pytest.approx(max(left_inner, right_inner), abs=0.01)
 
 
+def test_row_gap_overrides_track_actual_horizontal_lane_span_for_main_and_panel() -> None:
+    main_pipeline = Pipeline(
+        nodes=[
+            Node("upper_left", "Upper Left"),
+            Node("upper_right", "Upper Right"),
+            Node("lower_left", "Lower Left"),
+            Node("lower_right", "Lower Right"),
+        ],
+        edges=[
+            Edge("e1", "upper_left", "lower_left"),
+            Edge("e2", "upper_left", "lower_right"),
+        ],
+    )
+    validated_main = validate_pipeline(main_pipeline)
+    theme = main_pipeline.theme
+    placed_main = {
+        "upper_left": _make_layout_node("upper_left", x=0.0, y=0.0, rank=0, order=0),
+        "upper_right": _make_layout_node("upper_right", x=220.0, y=0.0, rank=1, order=0),
+        "lower_left": _make_layout_node("lower_left", x=0.0, y=200.0, rank=0, order=1),
+        "lower_right": _make_layout_node("lower_right", x=220.0, y=200.0, rank=1, order=1),
+    }
+    routed_main = (
+        _make_routed_edge(
+            validated_main.edge_lookup["e1"],
+            (
+                Point(120.0, 40.0),
+                Point(150.0, 40.0),
+                Point(150.0, 120.0),
+                Point(250.0, 120.0),
+                Point(250.0, 240.0),
+            ),
+            theme,
+        ),
+        _make_routed_edge(
+            validated_main.edge_lookup["e2"],
+            (
+                Point(120.0, 40.0),
+                Point(170.0, 40.0),
+                Point(170.0, 140.0),
+                Point(320.0, 140.0),
+                Point(320.0, 240.0),
+            ),
+            theme,
+        ),
+    )
+    expected_gap = 20.0 + theme.route_track_gap
+
+    assert _row_gap_overrides(validated_main, placed_main, routed_main, ()) == {(0, 0): expected_gap}
+
+    panel_pipeline = _build_detail_row_gap_fixture()
+    validated_panel = validate_pipeline(panel_pipeline).detail_panel
+    panel_theme = panel_pipeline.theme
+    placed_panel = {
+        "shared": _make_layout_node("shared", x=0.0, y=0.0, rank=0, order=0),
+        "upper": _make_layout_node("upper", x=220.0, y=0.0, rank=1, order=0),
+        "lower": _make_layout_node("lower", x=220.0, y=200.0, rank=1, order=1),
+        "upper_out": _make_layout_node("upper_out", x=440.0, y=0.0, rank=2, order=0),
+        "lower_out": _make_layout_node("lower_out", x=440.0, y=200.0, rank=2, order=1),
+    }
+    routed_panel = (
+        _make_routed_edge(
+            validated_panel.edge_lookup["d1"],
+            (
+                Point(120.0, 40.0),
+                Point(150.0, 40.0),
+                Point(150.0, 120.0),
+                Point(250.0, 120.0),
+                Point(250.0, 40.0),
+                Point(220.0, 40.0),
+            ),
+            panel_theme,
+        ),
+        _make_routed_edge(
+            validated_panel.edge_lookup["d2"],
+            (
+                Point(120.0, 40.0),
+                Point(170.0, 40.0),
+                Point(170.0, 140.0),
+                Point(250.0, 140.0),
+                Point(250.0, 240.0),
+                Point(220.0, 240.0),
+            ),
+            panel_theme,
+        ),
+    )
+
+    assert _row_gap_overrides(validated_panel, placed_panel, routed_panel, ()) == {(0, 0): expected_gap}
+
+
+def test_nested_groups_keep_visible_inner_gap_and_header_clearance() -> None:
+    pipeline = _build_nested_group_fixture()
+    layout = build_layout(pipeline)
+    overlays = {overlay.group.id: overlay.bounds for overlay in layout.main.groups}
+    metrics = resolve_theme_metrics(pipeline.theme)
+    parent = overlays["parent"]
+    child = overlays["child"]
+
+    assert [overlay.group.id for overlay in layout.main.groups] == ["parent", "child"]
+    assert child.x >= parent.x + pipeline.theme.group_padding - 0.01
+    assert child.right <= parent.right - pipeline.theme.group_padding + 0.01
+    assert child.bottom <= parent.bottom - pipeline.theme.group_padding + 0.01
+    assert child.y - parent.y > pipeline.theme.subtitle_font_size * metrics.line_height_ratio
+
+
 def test_forward_edge_entering_group_bends_outside_group_bounds() -> None:
     pipeline = Pipeline(
         nodes=[
@@ -430,6 +732,23 @@ def test_forward_edge_entering_group_bends_outside_group_bounds() -> None:
 
     assert bends
     assert all(not _point_in_bounds(point, execution) for point in bends)
+
+
+def test_grouped_forward_edge_can_use_right_side_direct_elbow() -> None:
+    layout = build_layout(_build_generate_pipeline_fixture())
+    inputs = next(overlay.bounds for overlay in layout.main.groups if overlay.group.id == "feature_stage")
+    routed = {edge.edge.id: edge for edge in layout.main.edges}
+    guide = layout.main.nodes["h_feature"]
+    target = layout.main.nodes["main_blocks"]
+
+    points = routed["h_to_main"].points
+    bends = _bend_points(points)
+
+    assert len(points) == 3
+    assert bends == [points[1]]
+    assert points[0] == Point(guide.right, guide.center_y)
+    assert points[-1] == Point(target.center_x, target.y)
+    assert all(not _point_in_bounds(point, inputs) for point in bends)
 
 
 def test_back_edge_leaves_group_before_bending() -> None:
@@ -984,6 +1303,178 @@ def test_detail_panel_guides_expand_outward() -> None:
         assert guide.points[0].x != pytest.approx(guide.points[1].x)
 
 
+def test_detail_panel_nested_groups_keep_visible_inner_gap_and_header_clearance() -> None:
+    pipeline = _build_nested_detail_panel_fixture()
+    layout = build_layout(pipeline)
+    overlays = {overlay.group.id: overlay.bounds for overlay in layout.detail_panel.graph.groups}
+    metrics = resolve_theme_metrics(pipeline.theme)
+    parent = overlays["parent"]
+    child = overlays["child"]
+
+    assert [overlay.group.id for overlay in layout.detail_panel.graph.groups] == ["parent", "child"]
+    assert child.x >= parent.x + pipeline.theme.group_padding - 0.01
+    assert child.right <= parent.right - pipeline.theme.group_padding + 0.01
+    assert child.bottom <= parent.bottom - pipeline.theme.group_padding + 0.01
+    assert child.y - parent.y > pipeline.theme.subtitle_font_size * metrics.line_height_ratio
+
+
+def test_detail_panel_shared_guidance_node_stays_above_stream_groups() -> None:
+    layout = build_layout(_build_generate_pipeline_fixture())
+    panel_nodes = layout.detail_panel.graph.nodes
+    panel_groups = layout.detail_panel.graph.groups
+    routed = {edge.edge.id: edge for edge in layout.detail_panel.graph.edges}
+    h_node = panel_nodes["panel_h"]
+    source_lane_one = _source_access_segment(routed["panel_h_to_nca_c"].points)
+    source_lane_two = _source_access_segment(routed["panel_h_to_nca_m"].points)
+
+    assert h_node.order == 0
+    assert panel_nodes["panel_c_in"].order == panel_nodes["panel_nca_c"].order == 1
+    assert panel_nodes["panel_m_in"].order == panel_nodes["panel_nca_m"].order == 2
+    assert all(not _point_in_bounds(Point(h_node.center_x, h_node.center_y), overlay.bounds) for overlay in panel_groups)
+    assert routed["panel_h_to_nca_c"].points[0].x == h_node.right
+    assert routed["panel_h_to_nca_m"].points[0].x == h_node.right
+    assert routed["panel_h_to_nca_c"].points[0].y != routed["panel_h_to_nca_m"].points[0].y
+    assert _collinear_overlap_length(*source_lane_one, *source_lane_two) == pytest.approx(0.0, abs=0.01)
+
+
+def test_generate_pipeline_row_gap_no_longer_scales_with_raw_cross_row_edge_count() -> None:
+    layout = build_layout(_build_generate_pipeline_fixture())
+    gap = _row_gap_between_rows(layout.main.nodes, 0, 1)
+
+    assert gap < 136.0
+
+
+def test_generate_pipeline_nested_decoder_groups_reserve_parent_header_space() -> None:
+    pipeline = _build_generate_pipeline_fixture()
+    layout = build_layout(pipeline)
+    overlays = {overlay.group.id: overlay.bounds for overlay in layout.main.groups}
+    metrics = resolve_theme_metrics(pipeline.theme)
+    decoders = overlays["decoders"]
+    candidate = overlays["candidate_stream"]
+    mask = overlays["mask_stream"]
+
+    assert candidate.x >= decoders.x + pipeline.theme.group_padding - 0.01
+    assert candidate.right <= decoders.right - pipeline.theme.group_padding + 0.01
+    assert mask.x >= decoders.x + pipeline.theme.group_padding - 0.01
+    assert mask.right <= decoders.right - pipeline.theme.group_padding + 0.01
+    assert candidate.y - decoders.y > pipeline.theme.subtitle_font_size * metrics.line_height_ratio
+    assert mask.y - decoders.y > pipeline.theme.subtitle_font_size * metrics.line_height_ratio
+
+
+def test_generate_pipeline_separates_shared_source_endpoints() -> None:
+    layout = build_layout(_build_generate_pipeline_fixture())
+    main = layout.main.nodes["main_blocks"]
+    routed = {edge.edge.id: edge for edge in layout.main.edges}
+    first = routed["main_to_candidate"].points
+    second = routed["main_to_mask"].points
+    first_lane = _source_access_segment(first)
+    second_lane = _source_access_segment(second)
+
+    assert first[0].x == second[0].x == main.right
+    assert first[0].y != second[0].y
+    assert _collinear_overlap_length(*first_lane, *second_lane) == pytest.approx(0.0, abs=0.01)
+
+
+def test_generate_pipeline_separates_shared_target_endpoints() -> None:
+    layout = build_layout(_build_generate_pipeline_fixture())
+    fusion = layout.main.nodes["fusion"]
+    routed = {edge.edge.id: edge for edge in layout.main.edges}
+    first = routed["candidate_to_fusion"].points
+    second = routed["skip_to_fusion"].points
+    first_lane = _target_access_segment(first)
+    second_lane = _target_access_segment(second)
+
+    assert first[-1].y == second[-1].y == fusion.y
+    assert first[-1].x != second[-1].x
+    assert _collinear_overlap_length(*first_lane, *second_lane) == pytest.approx(0.0, abs=0.01)
+
+
+def test_generate_pipeline_orders_upper_top_entry_closer_to_fusion_center() -> None:
+    layout = build_layout(_build_generate_pipeline_fixture())
+    fusion = layout.main.nodes["fusion"]
+    routed = {edge.edge.id: edge for edge in layout.main.edges}
+    candidate = routed["candidate_to_fusion"].points
+    skip = routed["skip_to_fusion"].points
+    candidate_lane = _target_access_segment(candidate)
+    skip_lane = _target_access_segment(skip)
+
+    assert candidate_lane[0].y > skip_lane[0].y
+    assert not _segment_crossings(candidate, skip)
+    assert abs(skip[-1].x - fusion.center_x) < abs(candidate[-1].x - fusion.center_x)
+
+
+def test_shared_target_top_side_orders_upper_approach_inward() -> None:
+    theme = Theme()
+    pipeline = Pipeline(
+        nodes=[Node("upper", "Upper"), Node("lower", "Lower"), Node("target", "Target")],
+        edges=[Edge("upper_edge", "upper", "target"), Edge("lower_edge", "lower", "target")],
+        theme=theme,
+    )
+    validated = validate_pipeline(pipeline)
+    nodes = {
+        "upper": _make_layout_node("upper", x=80.0, y=40.0, rank=0, order=0),
+        "lower": _make_layout_node("lower", x=80.0, y=160.0, rank=0, order=1),
+        "target": _make_layout_node("target", x=300.0, y=300.0, rank=1, order=0),
+    }
+    routed_by_id = {
+        "upper_edge": _make_routed_edge(
+            validated.edge_lookup["upper_edge"],
+            (Point(200.0, 80.0), Point(350.0, 80.0), Point(350.0, 300.0)),
+            theme,
+        ),
+        "lower_edge": _make_routed_edge(
+            validated.edge_lookup["lower_edge"],
+            (Point(200.0, 200.0), Point(330.0, 200.0), Point(330.0, 300.0)),
+            theme,
+        ),
+    }
+
+    _separate_overlapping_endpoints(validated, nodes, routed_by_id)
+
+    upper = routed_by_id["upper_edge"].points
+    lower = routed_by_id["lower_edge"].points
+    target = nodes["target"]
+
+    assert not _segment_crossings(upper, lower)
+    assert abs(upper[-1].x - target.center_x) < abs(lower[-1].x - target.center_x)
+
+
+def test_shared_target_left_side_orders_shallower_approach_inward() -> None:
+    theme = Theme()
+    pipeline = Pipeline(
+        nodes=[Node("outer", "Outer"), Node("inner", "Inner"), Node("target", "Target")],
+        edges=[Edge("outer_edge", "outer", "target"), Edge("inner_edge", "inner", "target")],
+        theme=theme,
+    )
+    validated = validate_pipeline(pipeline)
+    nodes = {
+        "outer": _make_layout_node("outer", x=80.0, y=180.0, width=120.0, height=72.0, rank=0, order=0),
+        "inner": _make_layout_node("inner", x=80.0, y=40.0, width=120.0, height=72.0, rank=0, order=1),
+        "target": _make_layout_node("target", x=320.0, y=190.0, width=120.0, height=72.0, rank=1, order=0),
+    }
+    routed_by_id = {
+        "outer_edge": _make_routed_edge(
+            validated.edge_lookup["outer_edge"],
+            (Point(240.0, 222.0), Point(320.0, 222.0)),
+            theme,
+        ),
+        "inner_edge": _make_routed_edge(
+            validated.edge_lookup["inner_edge"],
+            (Point(240.0, 80.0), Point(280.0, 80.0), Point(280.0, 230.0), Point(320.0, 230.0)),
+            theme,
+        ),
+    }
+
+    _separate_overlapping_endpoints(validated, nodes, routed_by_id)
+
+    outer = routed_by_id["outer_edge"].points
+    inner = routed_by_id["inner_edge"].points
+    target = nodes["target"]
+
+    assert not _segment_crossings(outer, inner)
+    assert abs(outer[-1].y - target.center_y) < abs(inner[-1].y - target.center_y)
+
+
 def test_shared_row_bands_align_nodes_across_ranks() -> None:
     pipeline = Pipeline(
         nodes=[
@@ -1037,15 +1528,21 @@ def test_fanout_routing_uses_short_source_spine() -> None:
     layout = build_layout(pipeline)
     routed = {edge.edge.id: edge for edge in layout.main.edges}
     theme = Theme()
+    source = layout.main.nodes["source"]
 
     edge_one = routed["e1"].points
     edge_two = routed["e2"].points
+    source_lane_one = _source_access_segment(edge_one)
+    source_lane_two = _source_access_segment(edge_two)
 
     assert edge_one != edge_two
     assert len(edge_one) <= 4
     assert len(edge_two) <= 4
-    assert edge_one[0] == edge_two[0]
-    assert edge_two[1].x - edge_two[0].x <= theme.route_track_gap * 2
+    assert edge_one[0].x == edge_two[0].x == source.right
+    assert edge_one[0].y != edge_two[0].y
+    assert _collinear_overlap_length(*source_lane_one, *source_lane_two) == pytest.approx(0.0, abs=0.01)
+    assert source_lane_one[1].x - source_lane_one[0].x <= theme.route_track_gap * 2
+    assert source_lane_two[1].x - source_lane_two[0].x <= theme.route_track_gap * 2
 
 
 def test_fanin_routing_uses_short_target_spine() -> None:
@@ -1057,14 +1554,20 @@ def test_fanin_routing_uses_short_target_spine() -> None:
     layout = build_layout(pipeline)
     routed = {edge.edge.id: edge for edge in layout.main.edges}
     theme = Theme()
+    sink = layout.main.nodes["sink"]
 
     edge_one = routed["e1"].points
     edge_two = routed["e2"].points
+    target_lane_one = _target_access_segment(edge_one)
+    target_lane_two = _target_access_segment(edge_two)
 
     assert len(edge_one) <= 4
     assert len(edge_two) <= 4
-    assert edge_two[-1] == edge_one[-1]
-    assert edge_two[-1].x - edge_two[-2].x <= theme.route_track_gap * 2
+    assert edge_one[-1].x == edge_two[-1].x == sink.x
+    assert edge_one[-1].y != edge_two[-1].y
+    assert _collinear_overlap_length(*target_lane_one, *target_lane_two) == pytest.approx(0.0, abs=0.01)
+    assert target_lane_one[1].x - target_lane_one[0].x <= theme.route_track_gap * 2
+    assert target_lane_two[1].x - target_lane_two[0].x <= theme.route_track_gap * 2
 
 
 def test_forward_router_can_use_top_and_bottom_ports_when_shorter() -> None:

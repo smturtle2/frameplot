@@ -33,7 +33,10 @@ def order_nodes(
             _resort_rank(nodes_by_rank[rank], outgoing, order, validated)
             _refresh_order(nodes_by_rank[rank], order)
 
-    if getattr(validated, "detail_panel", None) is not None:
+    if isinstance(validated, ValidatedDetailPanel):
+        _apply_detail_panel_shared_source_lanes(validated, ranks, order)
+
+    if isinstance(validated, ValidatedPipeline) and validated.detail_panel is not None:
         _apply_detail_panel_bias(validated, nodes_by_rank, ranks, order)
 
     return order
@@ -42,12 +45,18 @@ def order_nodes(
 def _forward_neighbors(
     validated: ValidatedPipeline | ValidatedDetailPanel,
     ranks: dict[str, int],
+    *,
+    included_node_ids: set[str] | None = None,
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     incoming: dict[str, list[str]] = defaultdict(list)
     outgoing: dict[str, list[str]] = defaultdict(list)
 
     for edge in validated.edges:
         target_node_id = validated.edge_targets[edge.id].node_id
+        if included_node_ids is not None and (
+            edge.source not in included_node_ids or target_node_id not in included_node_ids
+        ):
+            continue
         if ranks[edge.source] < ranks[target_node_id]:
             incoming[target_node_id].append(edge.source)
             outgoing[edge.source].append(target_node_id)
@@ -112,6 +121,125 @@ def _apply_detail_panel_bias(
             order[node_id] = start_row + index
 
 
+def _apply_detail_panel_shared_source_lanes(
+    validated: ValidatedDetailPanel,
+    ranks: dict[str, int],
+    order: dict[str, int],
+) -> None:
+    group_membership = _group_membership(validated)
+    components = _weak_components(validated)
+    incoming, outgoing = _forward_neighbors(validated, ranks)
+
+    for component_nodes in components:
+        component_set = set(component_nodes)
+        shared_sources = [
+            node_id
+            for node_id in component_nodes
+            if _is_detail_panel_shared_source(
+                node_id,
+                component_set,
+                group_membership,
+                incoming,
+                outgoing,
+                order,
+            )
+        ]
+        if not shared_sources:
+            continue
+
+        shared_sources.sort(key=lambda node_id: (order[node_id], validated.node_index[node_id], node_id))
+        shared_source_ids = set(shared_sources)
+        nonshared_rows = _reorder_component_nodes(
+            validated,
+            ranks,
+            component_set - shared_source_ids,
+        )
+
+        for index, node_id in enumerate(shared_sources):
+            order[node_id] = index
+        for node_id, row in nonshared_rows.items():
+            order[node_id] = row + len(shared_sources)
+
+
+def _is_detail_panel_shared_source(
+    node_id: str,
+    component_nodes: set[str],
+    group_membership: dict[str, tuple[str, ...]],
+    incoming: dict[str, list[str]],
+    outgoing: dict[str, list[str]],
+    order: dict[str, int],
+) -> bool:
+    if group_membership.get(node_id):
+        return False
+    if incoming.get(node_id):
+        return False
+
+    targets = [target_id for target_id in outgoing.get(node_id, ()) if target_id in component_nodes]
+    if len(set(targets)) < 2:
+        return False
+
+    downstream_lanes = {
+        (
+            order[target_id],
+            group_membership.get(target_id, ()),
+        )
+        for target_id in targets
+    }
+    return len(downstream_lanes) >= 2
+
+
+def _group_membership(
+    validated: ValidatedPipeline | ValidatedDetailPanel,
+) -> dict[str, tuple[str, ...]]:
+    memberships: dict[str, list[str]] = defaultdict(list)
+    for group in validated.groups:
+        for node_id in group.node_ids:
+            memberships[node_id].append(group.id)
+    return {
+        node_id: tuple(sorted(group_ids))
+        for node_id, group_ids in memberships.items()
+    }
+
+
+def _reorder_component_nodes(
+    validated: ValidatedPipeline | ValidatedDetailPanel,
+    ranks: dict[str, int],
+    included_node_ids: set[str],
+) -> dict[str, int]:
+    if not included_node_ids:
+        return {}
+
+    nodes_by_rank: dict[int, list[str]] = defaultdict(list)
+    for node_id in included_node_ids:
+        nodes_by_rank[ranks[node_id]].append(node_id)
+
+    for rank_nodes in nodes_by_rank.values():
+        rank_nodes.sort(key=validated.node_index.__getitem__)
+
+    local_order = {
+        node_id: index
+        for rank_nodes in nodes_by_rank.values()
+        for index, node_id in enumerate(rank_nodes)
+    }
+
+    incoming, outgoing = _forward_neighbors(
+        validated,
+        ranks,
+        included_node_ids=included_node_ids,
+    )
+    ordered_ranks = sorted(nodes_by_rank)
+
+    for _ in range(4):
+        for rank in ordered_ranks[1:]:
+            _resort_rank(nodes_by_rank[rank], incoming, local_order, validated)
+            _refresh_order(nodes_by_rank[rank], local_order)
+        for rank in reversed(ordered_ranks[:-1]):
+            _resort_rank(nodes_by_rank[rank], outgoing, local_order, validated)
+            _refresh_order(nodes_by_rank[rank], local_order)
+
+    return local_order
+
+
 def _detail_focus_path_nodes(
     validated: ValidatedPipeline,
     ranks: dict[str, int],
@@ -151,22 +279,41 @@ def _reachable(start: str, adjacency: dict[str, list[str]]) -> set[str]:
     return seen
 
 
-def _weak_component_nodes(validated: ValidatedPipeline, start_node_id: str) -> set[str]:
+def _weak_components(validated: ValidatedPipeline | ValidatedDetailPanel) -> list[tuple[str, ...]]:
     adjacency: dict[str, set[str]] = {node.id: set() for node in validated.nodes}
     for edge in validated.edges:
         target_node_id = validated.edge_targets[edge.id].node_id
         adjacency[edge.source].add(target_node_id)
         adjacency[target_node_id].add(edge.source)
 
-    seen = {start_node_id}
-    queue = deque([start_node_id])
+    components: list[tuple[str, ...]] = []
+    seen: set[str] = set()
 
-    while queue:
-        node_id = queue.popleft()
-        for neighbor in sorted(adjacency[node_id], key=validated.node_index.__getitem__):
-            if neighbor in seen:
-                continue
-            seen.add(neighbor)
-            queue.append(neighbor)
+    for node in validated.nodes:
+        if node.id in seen:
+            continue
+        queue = deque([node.id])
+        seen.add(node.id)
+        members: list[str] = []
+        while queue:
+            node_id = queue.popleft()
+            members.append(node_id)
+            for neighbor in sorted(adjacency[node_id], key=validated.node_index.__getitem__):
+                if neighbor in seen:
+                    continue
+                seen.add(neighbor)
+                queue.append(neighbor)
+        members.sort(key=validated.node_index.__getitem__)
+        components.append(tuple(members))
 
-    return seen
+    return components
+
+
+def _weak_component_nodes(
+    validated: ValidatedPipeline | ValidatedDetailPanel,
+    start_node_id: str,
+) -> set[str]:
+    for component in _weak_components(validated):
+        if start_node_id in component:
+            return set(component)
+    return {start_node_id}

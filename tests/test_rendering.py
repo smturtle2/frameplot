@@ -25,8 +25,155 @@ SVG_NS = {"svg": "http://www.w3.org/2000/svg"}
 
 
 def _build_generate_pipeline_fixture() -> Pipeline:
-    namespace = runpy.run_path(str(Path(__file__).resolve().parents[1] / "test" / "generate_pipeline.py"))
-    return namespace["build_pipeline"]()
+    input_fill = "#F8F9FA"
+    input_stroke = "#495057"
+    split_fill = "#FFF3E0"
+    split_stroke = "#FB8C00"
+    h_fill = "#E8F5E9"
+    h_stroke = "#43A047"
+    c_fill = "#E3F2FD"
+    c_stroke = "#1E88E5"
+    m_fill = "#FCE4EC"
+    m_stroke = "#E53935"
+    fusion_fill = "#FAF6F0"
+    fusion_stroke = "#8A7A5C"
+    output_fill = "#F6F8FB"
+    output_stroke = "#263238"
+
+    theme = Theme.research()
+
+    return Pipeline(
+        nodes=(
+            Node("sar_input", "SAR Input", fill=input_fill, stroke=input_stroke),
+            Node("cloudy_hsi", "Cloudy HSI Input", fill=input_fill, stroke=input_stroke),
+            Node("sar_stem", "SAR ConvStem", fill=input_fill, stroke=input_stroke),
+            Node("hsi_stem", "Cloudy HSI ConvStem", fill=input_fill, stroke=input_stroke),
+            Node("feature_split", "Feature Split", "z0 -> c0 / m0", fill=split_fill, stroke=split_stroke),
+            Node("h_feature", "h Feature", "from HSI stem", fill=h_fill, stroke=h_stroke),
+            Node(
+                "main_blocks",
+                "Main Processing",
+                "N repeated dual-stream blocks",
+                fill="#F8FAFC",
+                stroke="#5C6773",
+                width=250.0,
+            ),
+            Node("candidate_decoder", "Candidate Decoder", "candidate", fill=c_fill, stroke=c_stroke),
+            Node("mask_decoder", "Mask Decoder", "mask", fill=m_fill, stroke=m_stroke),
+            Node(
+                "fusion",
+                "Fusion",
+                "out = (1 - m) * cloudy + m * candidate",
+                fill=fusion_fill,
+                stroke=fusion_stroke,
+                width=330.0,
+            ),
+            Node("output", "Cloud-free Output", fill=output_fill, stroke=output_stroke),
+        ),
+        edges=(
+            Edge("sar_to_stem", "sar_input", "sar_stem", color=input_stroke),
+            Edge("hsi_to_stem", "cloudy_hsi", "hsi_stem", color=input_stroke),
+            Edge("stem_to_split", "sar_stem", "feature_split", color=split_stroke),
+            Edge("stem_to_h", "hsi_stem", "h_feature", color=h_stroke),
+            Edge("split_to_main_c", "feature_split", "main_blocks", color=c_stroke),
+            Edge("split_to_main_m", "feature_split", "main_blocks", color=m_stroke, dashed=True),
+            Edge("h_to_main", "h_feature", "main_blocks", color=h_stroke, dashed=True),
+            Edge("main_to_candidate", "main_blocks", "candidate_decoder", color=c_stroke),
+            Edge("main_to_mask", "main_blocks", "mask_decoder", color=m_stroke),
+            Edge("candidate_to_fusion", "candidate_decoder", "fusion", color=c_stroke),
+            Edge("mask_to_fusion", "mask_decoder", "fusion", color=m_stroke),
+            Edge("skip_to_fusion", "cloudy_hsi", "fusion", color=fusion_stroke, dashed=True),
+            Edge("fusion_to_output", "fusion", "output", color=fusion_stroke),
+        ),
+        groups=(
+            Group(
+                "feature_stage",
+                "Input and Feature Extraction",
+                (
+                    "sar_input",
+                    "cloudy_hsi",
+                    "sar_stem",
+                    "hsi_stem",
+                    "feature_split",
+                    "h_feature",
+                ),
+                stroke=input_stroke,
+                fill="#F4F6F8",
+            ),
+            Group(
+                "candidate_stream",
+                "Candidate Branch",
+                ("candidate_decoder",),
+                stroke=c_stroke,
+                fill=c_fill,
+            ),
+            Group(
+                "mask_stream",
+                "Mask Branch",
+                ("mask_decoder",),
+                stroke=m_stroke,
+                fill=m_fill,
+            ),
+            Group(
+                "decoders",
+                "Independent Decoders",
+                ("candidate_decoder", "mask_decoder"),
+                stroke="#6C757D",
+                fill="#F8F9FA",
+            ),
+        ),
+        detail_panel=DetailPanel(
+            id="main_blocks_panel",
+            focus_node_id="main_blocks",
+            label="Main Processing: N Blocks",
+            nodes=(
+                Node("panel_h", "h Feature", "shared HSI guidance", fill=h_fill, stroke=h_stroke),
+                Node("panel_c_in", "c_k", "candidate stream input", fill=c_fill, stroke=c_stroke),
+                Node("panel_m_in", "m_k", "mask stream input", fill=m_fill, stroke=m_stroke),
+                Node("panel_nca_c", "NCA", "c with h", fill=c_fill, stroke=c_stroke),
+                Node("panel_nca_m", "NCA", "m with h", fill=m_fill, stroke=m_stroke),
+                Node("panel_l_ffn_c", "L-FFN", "local FFN", fill=c_fill, stroke=c_stroke),
+                Node("panel_l_ffn_m", "L-FFN", "local FFN", fill=m_fill, stroke=m_stroke),
+                Node("panel_gsa_c", "GSA", "c self-attention", fill=c_fill, stroke=c_stroke),
+                Node("panel_gsa_m", "GSA", "m self-attention", fill=m_fill, stroke=m_stroke),
+                Node("panel_g_ffn_c", "G-FFN", "global FFN", fill=c_fill, stroke=c_stroke),
+                Node("panel_g_ffn_m", "G-FFN", "global FFN", fill=m_fill, stroke=m_stroke),
+                Node("panel_c_out", "c_(k+1)", "to Candidate Decoder", fill=c_fill, stroke=c_stroke),
+                Node("panel_m_out", "m_(k+1)", "to Mask Decoder", fill=m_fill, stroke=m_stroke),
+            ),
+            edges=(
+                Edge("panel_c_to_nca", "panel_c_in", "panel_nca_c", color=c_stroke),
+                Edge("panel_m_to_nca", "panel_m_in", "panel_nca_m", color=m_stroke),
+                Edge("panel_h_to_nca_c", "panel_h", "panel_nca_c", color=h_stroke, dashed=True),
+                Edge("panel_h_to_nca_m", "panel_h", "panel_nca_m", color=h_stroke, dashed=True),
+                Edge("panel_nca_c_to_lffn", "panel_nca_c", "panel_l_ffn_c", color=c_stroke),
+                Edge("panel_nca_m_to_lffn", "panel_nca_m", "panel_l_ffn_m", color=m_stroke),
+                Edge("panel_lffn_c_to_gsa", "panel_l_ffn_c", "panel_gsa_c", color=c_stroke),
+                Edge("panel_lffn_m_to_gsa", "panel_l_ffn_m", "panel_gsa_m", color=m_stroke),
+                Edge("panel_gsa_c_to_gffn", "panel_gsa_c", "panel_g_ffn_c", color=c_stroke),
+                Edge("panel_gsa_m_to_gffn", "panel_gsa_m", "panel_g_ffn_m", color=m_stroke),
+                Edge("panel_gffn_c_to_out", "panel_g_ffn_c", "panel_c_out", color=c_stroke),
+                Edge("panel_gffn_m_to_out", "panel_g_ffn_m", "panel_m_out", color=m_stroke),
+            ),
+            groups=(
+                Group(
+                    "panel_candidate_stream",
+                    "Candidate (c) Stream",
+                    ("panel_c_in", "panel_nca_c", "panel_l_ffn_c", "panel_gsa_c", "panel_g_ffn_c", "panel_c_out"),
+                    stroke=c_stroke,
+                    fill=c_fill,
+                ),
+                Group(
+                    "panel_mask_stream",
+                    "Mask (m) Stream",
+                    ("panel_m_in", "panel_nca_m", "panel_l_ffn_m", "panel_gsa_m", "panel_g_ffn_m", "panel_m_out"),
+                    stroke=m_stroke,
+                    fill=m_fill,
+                ),
+            ),
+        ),
+        theme=theme,
+    )
 
 
 def _make_layout_node(
@@ -373,7 +520,7 @@ def test_svg_contains_expected_visual_elements() -> None:
 
 
 def test_built_in_themes_render_with_white_canvas_background() -> None:
-    for theme_factory in (Theme.soft_retro, Theme.retro, Theme.pastel, Theme.dark, Theme.cyberpunk, Theme.monochrome):
+    for theme_factory in (Theme.soft_retro, Theme.retro, Theme.research, Theme.dark, Theme.cyberpunk, Theme.monochrome):
         pipeline = Pipeline(nodes=[Node("n1", "Node")], edges=[], theme=theme_factory())
         root = ET.fromstring(pipeline.to_svg())
         background = root.find("./svg:rect", SVG_NS)
@@ -383,7 +530,7 @@ def test_built_in_themes_render_with_white_canvas_background() -> None:
 
 
 def test_theme_registry_exposes_named_theme_factories() -> None:
-    assert tuple(Theme.themes) == ("soft_retro", "retro", "pastel", "dark", "cyberpunk", "monochrome")
+    assert tuple(Theme.themes) == ("soft_retro", "retro", "research", "dark", "cyberpunk", "monochrome")
 
     first = Theme.themes.soft_retro()
     second = Theme.themes.soft_retro()
@@ -397,21 +544,24 @@ def test_theme_registry_exposes_named_theme_factories() -> None:
 
 
 def test_all_built_in_themes_render_group_strokes() -> None:
-    for theme_factory in (Theme.soft_retro, Theme.retro, Theme.pastel, Theme.dark, Theme.cyberpunk, Theme.monochrome):
+    for theme_factory in (Theme.soft_retro, Theme.retro, Theme.research, Theme.dark, Theme.cyberpunk, Theme.monochrome):
         assert theme_factory().group_stroke != "none"
 
 
 def test_only_retro_uses_group_accent_line() -> None:
     assert Theme.retro().show_group_accent_line is True
 
-    for theme_factory in (Theme.soft_retro, Theme.pastel, Theme.dark, Theme.cyberpunk, Theme.monochrome):
+    for theme_factory in (Theme.soft_retro, Theme.research, Theme.dark, Theme.cyberpunk, Theme.monochrome):
         assert theme_factory().show_group_accent_line is False
 
 
-def test_pastel_group_fill_defaults_to_white() -> None:
-    theme = Theme.pastel()
+def test_research_theme_matches_generate_pipeline_defaults() -> None:
+    theme = Theme.research()
 
-    assert theme.group_fill == "#FFFFFF"
+    assert theme.node_fill == "#F8F9FA"
+    assert theme.group_fill == "#EFF3F6"
+    assert theme.title_font_family == "'IBM Plex Sans', 'DejaVu Sans', sans-serif"
+    assert theme.route_track_gap == 18.0
 
 
 def test_node_text_color_auto_switches_between_dark_and_light() -> None:
@@ -437,7 +587,7 @@ def test_builtin_themes_use_automatic_node_palettes() -> None:
     base_nodes = [Node("first", "First"), Node("second", "Second")]
     base_edges = [Edge("e1", "first", "second")]
 
-    for theme_factory in (Theme.soft_retro, Theme.retro, Theme.pastel, Theme.dark, Theme.cyberpunk, Theme.monochrome):
+    for theme_factory in (Theme.soft_retro, Theme.retro, Theme.research, Theme.dark, Theme.cyberpunk, Theme.monochrome):
         theme = theme_factory()
         root = ET.fromstring(Pipeline(nodes=base_nodes, edges=base_edges, theme=theme).to_svg())
 
@@ -449,6 +599,9 @@ def test_builtin_themes_use_automatic_node_palettes() -> None:
 def test_built_in_themes_match_curated_palettes() -> None:
     assert Theme.soft_retro().color_palette == (
         "#F6C8B8", "#F8DCA8", "#CFE8C6", "#BFDCEC", "#D8C9F1",
+    )
+    assert Theme.research().color_palette == (
+        "#F8F9FA", "#FFF3E0", "#E8F5E9", "#E3F2FD", "#FCE4EC",
     )
     assert Theme.dark().color_palette == (
         "#171A26", "#2C3540", "#425059", "#657371", "#808C8B",
@@ -475,7 +628,7 @@ def test_soft_retro_preserves_retro_geometry_with_monospace_type() -> None:
 def test_non_retro_themes_have_distinct_visual_profiles() -> None:
     dark = Theme.dark()
     cyberpunk = Theme.cyberpunk()
-    pastel = Theme.pastel()
+    research = Theme.research()
     monochrome = Theme.monochrome()
 
     assert dark.corner_radius == 16.0
@@ -486,9 +639,10 @@ def test_non_retro_themes_have_distinct_visual_profiles() -> None:
     assert cyberpunk.stroke_width > dark.stroke_width
     assert "monospace" in cyberpunk.title_font_family.lower()
 
-    assert pastel.corner_radius > dark.corner_radius
-    assert pastel.group_corner_radius > pastel.corner_radius
-    assert pastel.shadow_blur > dark.shadow_blur * 0.5
+    assert research.corner_radius < dark.corner_radius
+    assert research.group_corner_radius > research.corner_radius
+    assert research.shadow_blur > 0.0
+    assert "ibm plex sans" in research.title_font_family.lower()
 
     assert monochrome.shadow_opacity == 0.0
     assert monochrome.corner_radius == 8.0

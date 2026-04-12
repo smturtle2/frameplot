@@ -63,13 +63,13 @@ class ResolvedThemeMetrics:
 class ThemeRegistry:
     soft_retro: Callable[[], "Theme"]
     retro: Callable[[], "Theme"]
-    pastel: Callable[[], "Theme"]
+    research: Callable[[], "Theme"]
     dark: Callable[[], "Theme"]
     cyberpunk: Callable[[], "Theme"]
     monochrome: Callable[[], "Theme"]
 
     def __iter__(self):
-        return iter(("soft_retro", "retro", "pastel", "dark", "cyberpunk", "monochrome"))
+        return iter(("soft_retro", "retro", "research", "dark", "cyberpunk", "monochrome"))
 
     def __getitem__(self, name: str) -> Callable[[], "Theme"]:
         return getattr(self, name)
@@ -138,7 +138,7 @@ class Theme:
 
     @classmethod
     def soft_retro(cls) -> 'Theme':
-        """A pastel-tinted retro theme with monospace lettering on a white canvas."""
+        """A soft-tinted retro theme with monospace lettering on a white canvas."""
         theme = cls.retro()
         theme.background_color = "#FFFFFF"
         theme.node_fill = "#FAF3E7"
@@ -270,37 +270,47 @@ class Theme:
         )
 
     @classmethod
-    def pastel(cls) -> 'Theme':
-        """A white-canvas soft editorial theme with pill shapes and airy shadows."""
+    def research(cls) -> 'Theme':
+        """A paper-ready academic theme with restrained slate spacing and muted accents."""
         return cls(
             background_color="#FFFFFF",
-            node_fill="#FFFFFF",
-            node_stroke="#D8A7B5",
-            node_text_color="#5A5568",
-            edge_color="#8FB7CC",
-            group_stroke="#D8A7B5",
-            group_fill="#FFFFFF",
-            group_label_color="#8A7188",
-            title_font_family="'DejaVu Sans', 'Trebuchet MS', 'Segoe UI', sans-serif",
+            node_fill="#F8F9FA",
+            node_stroke="#495057",
+            node_text_color="#1F2933",
+            edge_color="#52606D",
+            group_stroke="#7B8794",
+            group_fill="#EFF3F6",
+            group_label_color="#1F2933",
+            title_font_family="'IBM Plex Sans', 'DejaVu Sans', sans-serif",
+            title_font_size=15.0,
+            subtitle_font_size=11.0,
             title_font_weight=650,
-            subtitle_font_weight=500,
-            detail_panel_fill="#FFFCFB",
-            detail_panel_stroke="#CFE3EC",
-            detail_panel_title_color="#8A7188",
-            detail_panel_guide_color="#E9F3F7",
-            detail_panel_fill_opacity=0.98,
-            detail_panel_corner_radius=32.0,
-            group_fill_opacity=0.94,
-            stroke_width=1.25,
-            group_stroke_width=1.1,
-            corner_radius=28.0,
-            group_corner_radius=32.0,
+            subtitle_font_weight=450,
+            outer_margin=36.0,
+            node_padding_x=18.0,
+            node_padding_y=14.0,
+            inter_text_gap=7.0,
+            rank_gap=88.0,
+            node_gap=40.0,
+            component_gap=48.0,
+            group_padding=26.0,
+            max_text_width=240.0,
+            min_node_width=156.0,
+            min_node_height=72.0,
+            corner_radius=14.0,
+            group_corner_radius=18.0,
+            stroke_width=1.6,
+            group_stroke_width=1.2,
+            group_fill_opacity=0.16,
+            arrow_size=9.0,
+            route_track_gap=18.0,
+            back_edge_gap=28.0,
             shadow_blur=8.0,
-            shadow_opacity=0.07,
-            shadow_offset_y=4.0,
+            shadow_opacity=0.08,
+            shadow_offset_y=3.0,
             show_group_accent_line=False,
             color_palette=(
-                "#A8E6CF", "#DCEDC1", "#FFE8D4", "#FFAAA5", "#FF8BA6",
+                "#F8F9FA", "#FFF3E0", "#E8F5E9", "#E3F2FD", "#FCE4EC",
             ),
         )
 
@@ -342,7 +352,7 @@ class Theme:
 Theme.themes = ThemeRegistry(
     soft_retro=Theme.soft_retro,
     retro=Theme.retro,
-    pastel=Theme.pastel,
+    research=Theme.research,
     dark=Theme.dark,
     cyberpunk=Theme.cyberpunk,
     monochrome=Theme.monochrome,

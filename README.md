@@ -21,9 +21,9 @@ All built-in presets stay on a white canvas. The same hero pipeline is rendered 
 | --- | --- |
 | ![Soft Retro theme hero](docs/assets/frameplot-hero-soft-retro.png) | ![Retro theme hero](docs/assets/frameplot-hero-retro.png) |
 
-| Pastel | Dark |
+| Research | Dark |
 | --- | --- |
-| ![Pastel theme hero](docs/assets/frameplot-hero-pastel.png) | ![Dark theme hero](docs/assets/frameplot-hero-dark.png) |
+| ![Research theme hero](docs/assets/frameplot-hero-research.png) | ![Dark theme hero](docs/assets/frameplot-hero-dark.png) |
 
 | Cyberpunk | Monochrome |
 | --- | --- |

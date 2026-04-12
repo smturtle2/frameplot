@@ -24,7 +24,7 @@ class ThemeHero:
 THEME_HEROES = (
     ThemeHero("soft_retro", "Soft Retro", "soft-retro"),
     ThemeHero("retro", "Retro", "retro"),
-    ThemeHero("pastel", "Pastel", "pastel"),
+    ThemeHero("research", "Research", "research"),
     ThemeHero("dark", "Dark", "dark"),
     ThemeHero("cyberpunk", "Cyberpunk", "cyberpunk"),
     ThemeHero("monochrome", "Monochrome", "monochrome"),
